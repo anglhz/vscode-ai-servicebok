@@ -4,14 +4,18 @@ import { CarFront } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
+import { VehicleCard } from "@/components/vehicles/vehicle-card";
+import { getVehiclesForCurrentUser } from "@/services/vehicles";
 
 export const metadata: Metadata = { title: "Hem" };
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const [vehicle] = await getVehiclesForCurrentUser();
   return <>
     <PageHeader title="Hem" description="Ditt fordons historik, samlad på ett ställe." />
-    <EmptyState icon={<CarFront className="size-6" />} title="Välkommen till Servicebok"
-      description="Här får du snart en överblick över dina fordon, senaste service och kommande påminnelser."
-      action={<Button asChild className="min-h-12"><Link href="/vehicles">Visa fordon</Link></Button>} />
+    {vehicle ? <div className="space-y-4"><VehicleCard vehicle={vehicle} /><Button variant="outline" asChild className="min-h-12"><Link href="/vehicles">Visa alla fordon</Link></Button></div> :
+      <EmptyState icon={<CarFront className="size-6" />} title="Välkommen till Servicebok"
+        description="Lägg till ditt första fordon för att komma igång."
+        action={<Button asChild className="min-h-12"><Link href="/vehicles/new">Lägg till fordon</Link></Button>} />}
   </>;
 }
