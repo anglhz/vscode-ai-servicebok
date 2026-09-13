@@ -12,7 +12,8 @@ npm ci
 ```
 
 Kopiera `.env.example` till `.env.local` (PowerShell: `Copy-Item .env.example .env.local`).
-Ange `NEXT_PUBLIC_SUPABASE_URL` och `NEXT_PUBLIC_SUPABASE_ANON_KEY` från ett
+Ange servervariabeln `APP_URL=http://localhost:3000` samt
+`NEXT_PUBLIC_SUPABASE_URL` och `NEXT_PUBLIC_SUPABASE_ANON_KEY` från ett
 Supabase-utvecklingsprojekt. Lämna `SUPABASE_SERVICE_ROLE_KEY` tom; den används inte.
 
 Applicera migrationen i en utvecklingsmiljö före signup. Lokal Supabase kräver Docker
@@ -38,12 +39,32 @@ Committa aldrig lokala env-filer eller riktiga nycklar.
 
 ## Auth-inställningar
 
-Aktivera e-post/lösenord i Supabase. Använd minst 12 tecken för nya lösenord.
+Aktivera e-post/lösenord i Supabase. Sätt minsta lösenordslängd till 8 tecken även i
+Supabases projektinställningar; signup accepterar 8–128 tecken i applikationen.
 Behåll e-postbekräftelse i produktion; utan bekräftelsekrav loggas nya konton in direkt.
 
-Sätt Supabase Auth **Site URL** till appens `/auth/callback`, lokalt
-`http://localhost:3000/auth/callback`, och motsvarande HTTPS-adress i produktion.
-Signup använder denna konfigurerade URL, aldrig en klientstyrd redirect.
+Supabase Auth **Site URL** är applikationens bas-URL, inte callback-sökvägen.
+Signup skickar explicit `options.emailRedirectTo = APP_URL + /auth/callback`.
+Lägg callback-URL:en bland Supabases tillåtna **Redirect URLs**.
+
+| Miljö | Servervariabel APP_URL / Site URL | Tillåten Redirect URL |
+| --- | --- | --- |
+| Local | `http://localhost:3000` | `http://localhost:3000/auth/callback` |
+| Vercel preview | Preview-deploymentens exakta HTTPS-bas-URL | Samma bas-URL följd av `/auth/callback` |
+| Production | Applikationens ordinarie HTTPS-bas-URL | Samma bas-URL följd av `/auth/callback` |
+
+Konfigurera APP_URL separat för Development, Preview och Production i Vercel.
+För preview används en exakt deployment-URL eller en stabil branch-alias som
+öppnas i webbläsaren. Lägg till dess exakta callback i Supabase innan auth testas;
+uppdatera APP_URL och gör en ny deployment om adressen ändras. Använd gärna en
+separat Supabase-utvecklingsinstans för preview. Om preview delar Supabase med
+produktion behåll Site URL som produktionsbasen och tillåt även exakt preview-callback.
+Använd exakta redirects utan wildcard i produktion.
+
+APP_URL är server-only och måste vara en bas-URL utan sökväg, query, fragment eller
+inloggningsuppgifter. HTTPS krävs utom för localhost. Ingen fallback till request
+Host, Origin eller formulärdata finns. Saknad/ogiltig APP_URL stoppar signup.
+Även callbackens vidarekopplingar till dashboard/felsida använder denna konfiguration.
 Använd bekräftelsemallen med `{{ .ConfirmationURL }}`. SSR använder PKCE;
 callback utbyter koden mot session. Öppna bekräftelsen i samma webbläsare som signup.
 Testa SMTP, bekräftelse och rate limits i utvecklingsprojektet före produktion.
@@ -60,7 +81,7 @@ Testa SMTP, bekräftelse och rate limits i utvecklingsprojektet före produktion
   Cookies är browser-läsbara för kompatibilitet med Supabases browserklient.
 - Skrivbar serverklient används i actions/callback; skrivskyddad klient används i
   Server Components efter proxyn. Ingen klient använder service role.
-- Zod validerar auth-input serverside. Signup kräver 12–128 tecken och matchande
+- Zod validerar auth-input serverside. Signup kräver 8–128 tecken och matchande
   lösenord. Login tillåter även äldre kortare lösenord. Inget lösenord trimmas.
 - Formulär behåller inmatning vid fel. Lösenord returneras aldrig i action-state.
   Råa auth-fel, tokens och lösenord loggas inte.

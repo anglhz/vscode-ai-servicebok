@@ -22,11 +22,11 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
           <label htmlFor={name} className="text-sm font-medium">{labels[name]}</label>
           <Input id={name} name={name} type={name === "email" ? "email" : "password"} required
             autoComplete={name === "email" ? "email" : registering ? "new-password" : "current-password"}
-            maxLength={name === "email" ? 254 : 128} minLength={name !== "email" && registering ? 12 : undefined}
+            maxLength={name === "email" ? 254 : 128} minLength={name !== "email" && registering ? 8 : undefined}
             autoCapitalize="none" spellCheck={false} className="min-h-12 text-base"
             value={values[name]} onChange={(event) => setValues({ ...values, [name]: event.target.value })}
             aria-invalid={Boolean(state.errors?.[name])} aria-describedby={state.errors?.[name] ? `${name}-error` : name === "password" && registering ? "password-help" : undefined} />
-          {name === "password" && registering && <p id="password-help" className="text-xs text-muted-foreground">Använd 12–128 tecken.</p>}
+          {name === "password" && registering && <p id="password-help" className="text-xs text-muted-foreground">Använd 8–128 tecken.</p>}
           {state.errors?.[name] && <p id={`${name}-error`} role="alert" className="text-sm text-destructive">{state.errors[name]?.[0]}</p>}
         </div>)}
         {state.message && <p role="alert" className="text-sm text-destructive">{state.message}</p>}

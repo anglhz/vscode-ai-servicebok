@@ -12,9 +12,11 @@ describe("auth validation", () => {
     expect(loginSchema.safeParse({ email: "a@example.com", password: "oldpass" }).success).toBe(true);
   });
   it("enforces signup length and confirmation", () => {
-    for (const [password, confirmPassword] of [["short", "short"], ["a".repeat(129), "a".repeat(129)], ["a".repeat(12), "b".repeat(12)]]) {
+    for (const [password, confirmPassword] of [["a".repeat(7), "a".repeat(7)], ["a".repeat(129), "a".repeat(129)], ["a".repeat(8), "b".repeat(8)]]) {
       expect(signupSchema.safeParse({ email: "a@example.com", password, confirmPassword }).success).toBe(false);
     }
-    expect(signupSchema.safeParse({ email: "a@example.com", password: "a".repeat(12), confirmPassword: "a".repeat(12) }).success).toBe(true);
+    for (const length of [8, 128]) {
+      expect(signupSchema.safeParse({ email: "a@example.com", password: "a".repeat(length), confirmPassword: "a".repeat(length) }).success).toBe(true);
+    }
   });
 });
