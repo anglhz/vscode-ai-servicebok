@@ -1,102 +1,147 @@
 # Servicebok V2
 
-Teknisk grund för en digital servicebok. Next.js App Router, React, strikt TypeScript,
-Tailwind CSS och shadcn/ui. Läs PRODUCT.md, AGENTS.md, DATABASE.md,
-ARCHITECTURE.md och DESIGN.md innan produktfunktioner implementeras.
+Next.js App Router, strikt TypeScript, Tailwind och shadcn/ui.
+Läs PRODUCT.md, AGENTS.md, DATABASE.md, ARCHITECTURE.md och DESIGN.md före större ändringar.
 
 ## Lokal setup
 
-Krav: Node.js 24 LTS och npm. `.nvmrc` anger Node-versionen.
+Node.js 24 LTS (`.nvmrc`) och npm krävs.
 
 ```sh
 npm ci
+```
+
+Kopiera `.env.example` till `.env.local` (PowerShell: `Copy-Item .env.example .env.local`).
+Ange `NEXT_PUBLIC_SUPABASE_URL` och `NEXT_PUBLIC_SUPABASE_ANON_KEY` från ett
+Supabase-utvecklingsprojekt. Lämna `SUPABASE_SERVICE_ROLE_KEY` tom; den används inte.
+
+Applicera migrationen i en utvecklingsmiljö före signup. Lokal Supabase kräver Docker
+Desktop med Linux-motorn igång. Vid första installationen:
+
+```sh
+npx supabase init
+npx supabase start
+```
+
+Init skapar CLI-konfiguration. Start applicerar migrationer vid första starten.
+För en redan startad lokal databas används `npx supabase migration up --local`.
+Kopiera lokal API-URL och anon-nyckel från CLI till `.env.local`.
+Ingen hostad databas ändras automatiskt av denna kodändring.
+
+```sh
 npm run dev
 ```
 
-Öppna http://localhost:3000. Startsidan leder till `/dashboard`.
-Platshållarsidorna fungerar utan Supabase eller miljövariabler.
+Öppna http://localhost:3000. Utan session skickas användaren till /login.
+Saknad konfiguration ger aldrig åtkomst till skyddade routes.
+Committa aldrig lokala env-filer eller riktiga nycklar.
 
-När Supabase ska användas, kopiera `.env.example` till `.env.local` och fyll i
-`NEXT_PUBLIC_SUPABASE_URL` och `NEXT_PUBLIC_SUPABASE_ANON_KEY` från ditt
-utvecklingsprojekt. I PowerShell: `Copy-Item .env.example .env.local`.
-`SUPABASE_SERVICE_ROLE_KEY` ska lämnas tom i denna fas; den används inte av koden.
-Den får aldrig exponeras via NEXT_PUBLIC, skickas till klienten eller committas.
-Alla lokala `.env`-filer ignoreras av Git, med undantag för den tomma exempelfilen.
+## Auth-inställningar
+
+Aktivera e-post/lösenord i Supabase. Använd minst 12 tecken för nya lösenord.
+Behåll e-postbekräftelse i produktion; utan bekräftelsekrav loggas nya konton in direkt.
+
+Sätt Supabase Auth **Site URL** till appens `/auth/callback`, lokalt
+`http://localhost:3000/auth/callback`, och motsvarande HTTPS-adress i produktion.
+Signup använder denna konfigurerade URL, aldrig en klientstyrd redirect.
+Använd bekräftelsemallen med `{{ .ConfirmationURL }}`. SSR använder PKCE;
+callback utbyter koden mot session. Öppna bekräftelsen i samma webbläsare som signup.
+Testa SMTP, bekräftelse och rate limits i utvecklingsprojektet före produktion.
+
+## Session och säkerhet
+
+- `proxy.ts` använder Supabase SSR och `getClaims()` för förnyelse. Cookies
+  vidarebefordras till både request och response. Auth-svar använder private/no-store.
+- `requireUser()` verifierar med `getUser()` på servern. Skyddad layout samt
+  konto- och profilåtkomst använder kontrollen. Proxy är inte enda säkerhetslagret.
+- React cache återanvänder verifieringen inom en rendering, inte mellan användare.
+  App- och auth-layout är dynamiska.
+- Cookies använder path /, SameSite=Lax och Secure i produktion. Produktion kräver HTTPS.
+  Cookies är browser-läsbara för kompatibilitet med Supabases browserklient.
+- Skrivbar serverklient används i actions/callback; skrivskyddad klient används i
+  Server Components efter proxyn. Ingen klient använder service role.
+- Zod validerar auth-input serverside. Signup kräver 12–128 tecken och matchande
+  lösenord. Login tillåter även äldre kortare lösenord. Inget lösenord trimmas.
+- Formulär behåller inmatning vid fel. Lösenord returneras aldrig i action-state.
+  Råa auth-fel, tokens och lösenord loggas inte.
+- Redirects är fasta interna routes. Godtyckliga next-parametrar används inte.
+- Logout återkallar aktuell session, rensar SDK-cookies och invaliderar routercache.
+  Andra enheter påverkas inte. Redan utfärdade JWT:er kan vara giltiga till utgång;
+  använd rimlig tokenlivslängd i Supabase.
+
+## Migration och RLS
+
+`supabase/migrations/20260913000100_profiles.sql` skapar endast profiles.
+
+- UUID refererar till auth.users(id), med cascade vid separat administrerad kontoradering.
+- Fält och standardvärden följer DATABASE.md.
+- SECURITY DEFINER-trigger med tom search_path skapar profilen med new.id i
+  samma transaktion som Auth-användaren. Befintliga användare får profiler via backfill.
+- Ingen klientstyrd metadata används för identiteten.
+- profiles_select_own: SELECT endast när auth.uid() = id.
+- profiles_update_own: samma villkor före och efter UPDATE.
+- Kolumnprivilegier tillåter bara display_name, avatar_path, preferred_locale och timezone.
+  Klienter saknar INSERT/DELETE-rättigheter.
+- Trigger skyddar id och created_at. Återanvändbar set_updated_at sätter updated_at.
+- Triggerfunktionerna får inte anropas direkt av anon/authenticated.
+
+Kontovyn visar verifierad e-post och display name om det finns. Vid profilfel visas
+ett begripligt meddelande och utloggning finns kvar.
+
+## Databastyper
+
+Generera från migrerad databas:
+
+```sh
+npx supabase gen types typescript --local --schema public > types/database.generated.ts
+```
+
+För hostad utvecklingsdatabas används --project-id i stället för --local.
+Säkerställ UTF-8 vid omdirigering på äldre Windows PowerShell.
+Granska och committa filen, koppla sedan Database till Supabase-klienternas generics.
+Ingen genererad typfil har fabricerats: lokal Supabase var inte tillgänglig under
+uppgiften. Profilvyn använder Zod för sitt begränsade svar tills typer kan genereras.
 
 ## Kontroller
 
 ```sh
+npm test
 npm run typecheck
 npm run lint
 npm run build
 npm start
 ```
 
-Typecheck genererar först Next.js routetyper, även på en ren checkout.
-Build använder inga externa typsnitt eller Supabase-anrop.
-Lockfilen checkas in för reproducerbara installationer.
+Vitest testar validering, actions, serversession och cookie-förnyelse.
+PGlite kör migrationsfilen i PostgreSQL via WASM under authenticated/anon.
+Testet ersätter auth.users/auth.uid med ett minimalt testkontrakt och testar riktig
+SQL, triggers och RLS. Det ersätter inte ett integrationstest av Supabase Auth/GoTrue.
 
-## Struktur
+Sluttest i separat Supabase-utvecklingsmiljö:
+1. Skapa konton A/B, bekräfta e-post och kontrollera att profiler skapats.
+2. Logga in som A; öppna alla fem skyddade routes och /account.
+3. Läs egen profil via direkt Supabase-anrop; försök läsa/ändra B:s profil.
+   B ska inte returneras eller ändras. Ändring av id, insert och delete ska nekas.
+4. Kontrollera att utgångna sessioner förnyas och cookies sparas.
+5. Logga ut; /dashboard och /vehicles ska leda till /login, även efter bakåtnavigation.
+6. Kontrollera felaktiga lösenord, utgångna bekräftelser och återkallad session.
 
-| Sökväg | Ansvar |
-| --- | --- |
-| `app/(app)/` | Gemensam AppShell och statiska platshållarsidor |
-| `app/api/` | Plats för framtida Route Handlers |
-| `components/layout/` | AppShell, AppContainer och PageHeader |
-| `components/navigation/` | Gemensamma länkar, mobilnavigation och desktopsidebar |
-| `components/ui/` | shadcn/ui Button och Skeleton |
-| `components/vehicles/` | RegistrationNumber; övriga fordonskomponenter tillkommer senare |
-| `components/` | EmptyState, LoadingSkeleton, MileageDisplay och CurrencyDisplay |
-| `lib/supabase/` | Browserklient, serverklienter och kontroll av publika miljövariabler |
-| `lib/utils/` | Klassnamn och svenska visningsformat |
-| `lib/auth/`, `lib/permissions/`, `lib/validation/` | Reserverade mappar för kommande skyddade flöden |
-| `services/` | Tomma domänmappar för fordon, servicehändelser, dokument och påminnelser |
-| `types/` | Plats för delade typer; generera databastyper när schema finns |
-| `supabase/migrations/` | Endast platshållare, inga schemaändringar |
-| `public/` | Plats för statiska tillgångar |
+## Struktur och scope
 
-Mappar för framtida integrationer skapas när de behövs.
+- app/(auth): login, signup och Server Actions.
+- app/auth: PKCE-callback och bekräftelsefel.
+- app/(app): skyddad AppShell och fem appvyer.
+- components/auth och components/ui: formulär, logout och primitives.
+- lib/auth, lib/validation, lib/supabase: verifiering, schemas och klienter.
+- services/profiles: egen profil från verifierad identitet.
+- supabase/migrations och tests: SQL och säkerhetstester.
 
-## Avgränsning och säkerhet
-
-Alla nuvarande sidor är publika, statiska platshållare utan användardata,
-databasfrågor eller mutationer. Inloggning, ägarskap, RLS och databasens schema
-är inte implementerade. Lägg inte privata data på dessa sidor innan
-serververifierad session, behörighetskontroller och RLS finns på plats.
-
-`lib/supabase/browser.ts` använder endast publika variabler.
-`lib/supabase/server.ts` är skyddad med `server-only` och skapar klient per anrop:
-
-- `createClient()` är avsedd för Server Actions och Route Handlers med skrivbara cookies.
-- `createReadOnlyClient()` är avsedd för Server Components. Innan autentisering
-  införs måste en session-refresh proxy förnya cookies och vidarebefordra dem till
-  både request och response. Den skrivskyddade klienten förnyar inte browserns cookies.
-
-Klienterna startas först när funktionerna anropas. Saknad konfiguration ger ett
-tydligt utvecklarfel. Inga anrop görs från platshållarna. En admin-klient läggs
-till först när ett konkret serverflöde behöver service role.
-
-## Design och beslut
-
-- `/new` är en extra platshållare för fliken Ny; ingen händelse skapas där.
-- Navigation växlar till sidebar vid Tailwinds `md` (768 px). Mobilnavigationen
-  tar hänsyn till safe area och har reserverat utrymme under sidinnehållet.
-- Neutral ljus bas, grön accent och systemtypsnitt. Tokens ligger i
-  `app/globals.css` med Tailwind v4:s CSS-baserade theme. Spacing följer 4 px-bas.
-- Sidor och layout är Server Components. Endast aktiva navigationslänkar använder
-  klientlogik för aktuell route. Ingen global state eller helsidesspinner.
-- `LoadingSkeleton` är för lokalt laddande innehåll och visas inte artificiellt
-  på statiska sidor. Reducerad rörelse respekteras.
-- `CurrencyDisplay` tar ören, `MileageDisplay` tar svenska mil. Saknade värden
-  skiljs från noll. Formatteringen delas i `lib/utils/format.ts`.
-- shadcn-komponenterna har hämtats från registret. Deras `cn`-import använder
-  projektets gemensamma utility, och Button använder endast Radix Slot.
-
-Lägg till fler primitives vid behov med `npx shadcn@latest add <komponent>`.
-Kontrollera genererade importer och beroenden efteråt.
+Dashboard och fordonsvyer är platshållare. Inga fordonstabeller, ägarskap,
+servicehändelser, dokument, Stripe, PDF, externa API:er eller AI ingår.
+Theme i app/globals.css, spacing med 4 px-bas, sidebar från 768 px.
+Laddningsindikering är lokal på submitknappen.
 
 ## Referenser
 
-- [Next.js installation](https://nextjs.org/docs/app/getting-started/installation)
-- [Supabase SSR-klienter](https://supabase.com/docs/guides/auth/server-side/creating-a-client)
-- [shadcn/ui med Tailwind v4](https://ui.shadcn.com/docs/tailwind-v4)
+- [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client)
+- [Supabase användardata](https://supabase.com/docs/guides/auth/managing-user-data)
