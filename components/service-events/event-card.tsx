@@ -14,5 +14,6 @@ export function ServiceEventCard({ event }: { event: ServiceEvent }) {
       {event.cost_amount !== null && <CurrencyDisplay amountInOre={event.cost_amount} />}
     </div>
     {event.provider_name && <p className="break-words text-sm text-muted-foreground">{event.provider_name}</p>}
+    {Boolean(event.service_event_documents?.length) && <p className="text-xs font-medium">Dokument finns</p>}
   </Link>;
 }

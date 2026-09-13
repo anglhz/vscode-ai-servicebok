@@ -5,7 +5,7 @@ import { requireVehicleAccess } from "@/lib/permissions/vehicle";
 import { createClient } from "@/lib/supabase/server";
 import { serviceEventFormSchema, serviceEventSchema } from "@/lib/validation/service-event";
 
-const columns = "id, vehicle_id, category, title, event_date, mileage, cost_amount, currency, description, provider_name, notes, source_type, created_at";
+const columns = "id, vehicle_id, category, title, event_date, mileage, cost_amount, currency, description, provider_name, notes, source_type, created_at, service_event_documents(document_id)";
 export async function getServiceEventsForVehicle(vehicleId: string, page = 1) {
   const { supabase } = await requireVehicleAccess(vehicleId);
   const offset = (z.number().int().min(1).max(10000).parse(page) - 1) * 30;

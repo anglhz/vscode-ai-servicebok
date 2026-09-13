@@ -24,6 +24,7 @@ export default async function VehiclePage({ params, searchParams }: { params: Pr
       <div><dt className="mb-2 text-sm text-muted-foreground">Fordonstyp</dt><dd>{vehicleTypeLabels[vehicle.vehicle_type]}</dd></div>
       {vehicle.vin && <div><dt className="mb-2 text-sm text-muted-foreground">VIN / chassinummer</dt><dd className="break-all">{vehicle.vin}</dd></div>}
     </dl>
+    <Link href={`/vehicles/${vehicle.id}/documents`} className="mb-6 inline-flex min-h-12 items-center text-primary underline underline-offset-4">Visa dokument</Link>
     <ServiceTimeline vehicleId={vehicle.id} events={history.events} hasMore={history.hasMore} page={page} />
   </>;
 }

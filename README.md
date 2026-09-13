@@ -160,8 +160,8 @@ Sluttest i separat Supabase-utvecklingsmiljö:
 Fordonslistan, manuell registrering och fordonsprofil använder lagrad data.
 Dashboard visar senast skapade aktiva fordon eller en action för att lägga till ett.
 Globala Ny leder till en ny servicehändelse eller ett fordonsval. Fordonsprofilen
-visar servicehistorik med skapa, redigera och soft delete. Inga dokument, Stripe,
-PDF, externa API:er eller AI ingår.
+visar servicehistorik med skapa, redigera och soft delete, samt privata dokument.
+Ingen Stripe, PDF-export, externa fordons-API:er eller AI ingår.
 Theme i app/globals.css, spacing med 4 px-bas, sidebar från 768 px.
 Laddningsindikering är lokal på submitknappen.
 
@@ -329,7 +329,141 @@ Den ersätter inte riktig Supabase-integration. Före produktion behövs:
 4. Genomför skapa, redigera och ta bort på mobil med riktig data; verifiera att
    grundmiltal och tidigare historik bevaras. Ingen återställnings-UI för borttagna poster ingår.
 
+## Privata dokument
+
+Migration `supabase/migrations/20260913000400_documents.sql` körs efter servicehistoriken.
+Den skapar documents och service_event_documents med foreign keys, index och RLS,
+samt den privata bucketen `vehicle_documents`. Ingen hostad miljö ändras automatiskt.
+Storage måste finnas med `storage.allow_any_operation(text[])`. Kontrollera med:
+
+```sql
+select to_regprocedure('storage.allow_any_operation(text[])');
+```
+
+Om resultatet är null behöver Storage uppdateras innan migrationen körs. Ta inte
+bort operationskontrollen för att få migrationen att passera: den skiljer radering
+från nedladdning av redan dolda filer. Befintliga globala Storage-policies bör också
+granskas i utvecklingsinstansen.
+
+### Uppladdning
+
+1. Användaren väljer dokumenttyp och en fil. Klient och server validerar filnamn,
+   MIME och storlek. PDF, JPEG och PNG stöds, max 15 MiB (15 728 640 bytes; visas som
+   15 MB i UI). HEIC skjuts upp eftersom webbläsarstöd/konvertering kräver separat arbete.
+2. Servern verifierar requireVehicleAccess. RPC `create_document` verifierar också
+   auth.uid() och aktiv owner under befintlig vehicle/ownership-låsning, och skapar
+   pending metadata med uploaded_by_user_id från auth.uid(). Event-koppling valideras
+   och sparas atomiskt med metadata om eventId angavs.
+3. Databasen genererar dokumentets slumpmässiga UUID. Path blir
+   `vehicle_id/document_id/original`, aldrig användarens filnamn. CHECK och unikhet
+   skyddar formatet. Inga filbytes laddas upp om metadata misslyckas.
+4. Servern utfärdar en signerad upload-token för exakt path, utan upsert. Browsern
+   använder Supabase uploadToSignedUrl. Filbytes går direkt till privat Storage,
+   vilket undviker stora filkroppar genom Next.js/Vercel-funktioner. Ingen service role.
+5. RPC `finalize_document` kontrollerar verklig Storage-objektmetadata: exakt storlek
+   och MIME måste matcha reserverad metadata. Ägarskap, uppladdare, timeout och att
+   kopplad servicehändelse fortfarande finns kontrolleras igen. Först då blir dokumentet
+   ready och synligt. Bekräftelse kan upprepas utan dubbelregistrering om svaret tappas.
+
+Extra lifecycle-fält är upload_status (pending/ready) och storage_deleted_at för
+bekräftad fysisk städning. Övriga fält följer DATABASE.md. UI skapar bara private;
+datamodellen accepterar även transferable/shared utan att ge nya delningsrättigheter.
+Dokumentkopplingens trigger nekar olika vehicle-id även vid privilegierade inserts.
+Klienter har ingen direkt skrivrätt till metadata eller kopplingar.
+
+### RLS och Storage-policies
+
+- `documents_select_active_owner` visar endast ready, ej borttagna dokument för
+  aktiv owner. `service_event_documents_select_active_owner` kräver synligt dokument
+  och synlig servicehändelse. Pending/deleted metadata är inte normalt läsbar.
+- `vehicle_documents_insert` tillåter endast exakt reserverad pending-path för
+  uppladdaren som fortfarande är aktiv owner. Signering tillåts de första 15 minuterna.
+- `vehicle_documents_read` kräver ready, ej borttaget dokument och aktiv owner.
+- `vehicle_documents_delete` tillåter fysisk borttagning först efter soft delete.
+  `vehicle_documents_delete_select` ger den SELECT som Storage remove behöver enbart
+  under `object.delete`/`object.delete_many`, aldrig för signering eller nedladdning.
+- Restriktiva read/insert/delete-fences, no_update och no_anon skyddar denna bucket
+  även om andra features har breda permissiva Storage-policies. Andra buckets påverkas inte.
+- `document_object_access` är en begränsad SECURITY DEFINER-helper med tom search_path,
+  kvalificerade tabeller och kontroll av auth.uid(). Den returnerar bara boolean och
+  undviker RLS-rekursion. Mutations-RPC:er har EXECUTE endast för authenticated.
+- Ingen offentlig URL, ingen UPDATE/upsert av objekt och ingen permanent klient-DELETE
+  av metadata. Auth, ownership och servicehistorikens mutationsarkitektur ändras inte.
+
+### Öppna och ta bort
+
+`createDocumentDownloadUrl` verifierar vehicle access och hämtar exakt ready/ej borttaget
+dokument inom fordonet. Storage RLS kontrollerar åtkomst igen vid signering. URL gäller
+i 300 sekunder och använder attachment/filnamn för vanlig nedladdning; ingen inbäddad
+PDF/bildvisare eller offentlig thumbnail byggs. Länkar sparas inte i databasen eller loggar.
+En redan utfärdad URL är en tidsbegränsad åtkomstnyckel och kan fortfarande fungera till
+utgång om fysisk filradering misslyckas. Nya URL:er för soft deleted dokument nekas.
+
+Borttagning kräver bekräftelse. `soft_delete_document` sätter deleted_at först;
+kopplingar ligger kvar för spårbarhet men försvinner ur normala queries. Servern
+anropar därefter Storage remove. Misslyckad fysisk radering lämnas som retrybar
+städpost. Ingen återställnings-UI ingår och lyckad fysisk radering tar bort filbytes.
+
+### Avbrutna uppladdningar och driftstädning
+
+Vid signerings-/uploadfel avbryts pending metadata där anropet når servern. Om
+bekräftelsen misslyckas kan samma uppladdning bekräftas igen. En stängd flik kan lämna
+pending metadata/filer, vilket hanteras av cleanupDocuments före nästa uppladdning.
+Den behandlar högst 20 kandidater per körning för det behöriga fordonet:
+
+- `document_cleanup_candidates` soft deletar pending äldre än tre timmar och returnerar
+  dessa samt tidigare soft deleted dokument som inte är färdigstädade.
+- Storage remove körs via användarsession, därefter `complete_document_cleanup`.
+  Databasen markerar städning först när Storage-objektet verkligen saknas.
+- Tre timmar ger marginal för signerade upload-token: de gäller två timmar och kan
+  utfärdas under de första 15 minuterna. En gammal token kan återlägga en fysiskt raderad
+  fil före utgång, men aldrig göra deleted metadata synlig. Slutstädningen sker efteråt.
+
+För konton som inte laddar upp igen behövs en återkommande driftstädning före produktion.
+Den är inte schemalagd av denna PR. Kör samma kandidater → Storage API remove → complete
+med behörig användarsession. Historiska fordon utan aktiv ägare kräver ett separat
+administrerat städflöde. Radera aldrig storage.objects med SQL för att radera filbytes.
+Soft deleted metadata bevaras som spårbarhet även efter fysisk städning.
+
+### UI, queries och validering
+
+- Route `/vehicles/[vehicleId]/documents` visar dokumenttyp, filnamn, datum, filtyp,
+  storlek och kopplad servicehändelse. Listan har 30 poster per sida.
+- Servicehändelsens detaljsida visar DocumentCard och uppladdning. Skapa/edit-formuläret
+  hänvisar till uppladdning efter sparad händelse; databastran­saktionen blandas inte med filöverföring.
+- ServiceEventCard visar Dokument finns via en inbäddad relation i samma listquery.
+  Dokumentlistans eventtitlar hämtas också som relation; inga separata frågor per event.
+- Standard file input låter mobilen välja fil/bild och ta foto när webbläsaren stöder
+  detta. Status och fel är lokala, vald fil behålls vid fel, och slutbekräftelse kan återförsökas.
+- Filnamn max 180 tecken efter att kontrolltecken/bidi-kontroller rensats och slash ersatts.
+  Läsbart originalnamn sparas som metadata och visas som React-text, aldrig HTML eller path.
+- MIME valideras i browser, serverschema, DB och bucket; verklig lagrad storlek/MIME
+  kontrolleras vid finalize. Ingen fullständig content sniffing, antivirus eller PDF-
+  innehållsanalys ingår: MIME kan förfalskas, och en tillåten MIME garanterar inte ofarligt
+  filinnehåll. Signed upload gör att bytes inte passerar appservern. Utvärdera separat
+  filskanning före bred publik lansering. SVG/HTML/scripts/executables accepteras inte som typer.
+
+### Verifiering före produktion
+
+Tester täcker metadata/RPC, två användare, cross-vehicle-kopplingar, pending/ready/deleted,
+Storage-policyoperationer, breda befintliga policies, MIME/storlek, paths, cleanup och
+signerad nedladdning. PGlite kör alla fyra migrationer med minimala Auth/Storage-tabeller
+och en fixture för Storage-operation-helpern. Det testar PostgreSQL-regler, inte Storage-
+tjänstens tokenverifiering, objektlagring, CORS, CDN eller HTTP-implementation.
+
+Lokal Edge-kontroll med API-testdata kör upload från event, dokumentlista, signed download,
+delete-bekräftelse, tomt state och filfel vid 320/390/1280 px. Inga riktiga privata filer används.
+
+I riktig Supabase-utvecklingsmiljö återstår att applicera migrationen, generera typer
+från verkligt schema och testa signerad upload/download, MIME/storleksgränser, CORS,
+RLS med A/B, förlorat ägarskap, expired tokens, direkt Storage overwrite/sign/delete,
+borttagen event under upload samt fysisk radering och återförsök efter Storage-fel.
+Ingen hostad databas har migrerats och inga genererade typer har fabricerats.
+
 ## Referenser
 
 - [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client)
 - [Supabase användardata](https://supabase.com/docs/guides/auth/managing-user-data)
+- [Signerad uppladdning och tokenlivslängd](https://supabase.com/docs/reference/javascript/file-buckets-createsigneduploadurl)
+- [Signerad nedladdning](https://supabase.com/docs/reference/javascript/file-buckets-createsignedurl)
+- [Storage RLS och operationskontroller](https://supabase.com/docs/guides/storage/schema/helper-functions)
