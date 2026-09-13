@@ -43,6 +43,7 @@ export function EventForm({ vehicleId, eventId = null, initialValues }: { vehicl
         </div>)}
       </div>
     </details>
+    <p className="text-sm text-muted-foreground">Du kan lägga till dokument när händelsen har sparats.</p>
     {state.message && <p role="alert" className="text-sm text-destructive">{state.message}</p>}
     <div className="flex flex-col gap-3 sm:flex-row-reverse">
       <Button disabled={pending} aria-busy={pending} type="submit" className="min-h-12 flex-1">{pending ? "Sparar…" : "Spara händelse"}</Button>

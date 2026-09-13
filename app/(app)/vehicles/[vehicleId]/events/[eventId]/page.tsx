@@ -10,6 +10,7 @@ import { getServiceEventForVehicle } from "@/services/service-events";
 import { eventCategoryLabels, sourceLabels } from "@/lib/validation/service-event";
 import { formatEventDate } from "@/lib/utils/date";
 import { oreToKronorInput } from "@/lib/utils/money";
+import { EventDocuments } from "@/components/documents/event-documents";
 
 export const metadata: Metadata = { title: "Servicehändelse" };
 export default async function ServiceEventPage({ params, searchParams }: {
@@ -36,5 +37,6 @@ export default async function ServiceEventPage({ params, searchParams }: {
         <DeleteEvent vehicleId={vehicleId} eventId={eventId} />
       </div>
     </div>}
+    {!editing && <EventDocuments vehicleId={vehicleId} eventId={eventId} />}
   </>;
 }

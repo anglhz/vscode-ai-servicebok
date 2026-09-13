@@ -27,5 +27,6 @@ export const serviceEventSchema = z.object({
   mileage: z.number().int().nullable(), cost_amount: z.number().int().nullable(), currency: z.literal("SEK"),
   description: z.string().nullable(), provider_name: z.string().nullable(), notes: z.string().nullable(),
   source_type: z.enum(["owner", "previous_owner", "imported", "system"]), created_at: z.string(),
+  service_event_documents: z.array(z.object({ document_id: z.uuid() })).optional(),
 });
 export type ServiceEvent = z.infer<typeof serviceEventSchema>;
