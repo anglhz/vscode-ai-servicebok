@@ -16,7 +16,7 @@ Ange servervariabeln `APP_URL=http://localhost:3000` samt
 `NEXT_PUBLIC_SUPABASE_URL` och `NEXT_PUBLIC_SUPABASE_ANON_KEY` från ett
 Supabase-utvecklingsprojekt. Lämna `SUPABASE_SERVICE_ROLE_KEY` tom; den används inte.
 
-Applicera migrationen i en utvecklingsmiljö före signup. Lokal Supabase kräver Docker
+Applicera migrationerna i en utvecklingsmiljö före signup och fordonsregistrering. Lokal Supabase kräver Docker
 Desktop med Linux-motorn igång. Vid första installationen:
 
 ```sh
@@ -121,7 +121,7 @@ För hostad utvecklingsdatabas används --project-id i stället för --local.
 Säkerställ UTF-8 vid omdirigering på äldre Windows PowerShell.
 Granska och committa filen, koppla sedan Database till Supabase-klienternas generics.
 Ingen genererad typfil har fabricerats: lokal Supabase var inte tillgänglig under
-uppgiften. Profilvyn använder Zod för sitt begränsade svar tills typer kan genereras.
+uppgiften. Profil- och fordonsvyerna använder Zod för sina begränsade svar tills typer kan genereras.
 
 ## Kontroller
 
@@ -157,10 +157,72 @@ Sluttest i separat Supabase-utvecklingsmiljö:
 - services/profiles: egen profil från verifierad identitet.
 - supabase/migrations och tests: SQL och säkerhetstester.
 
-Dashboard och fordonsvyer är platshållare. Inga fordonstabeller, ägarskap,
-servicehändelser, dokument, Stripe, PDF, externa API:er eller AI ingår.
+Fordonslistan, manuell registrering och fordonsprofil använder lagrad data.
+Dashboard visar senast skapade aktiva fordon eller en action för att lägga till ett.
+Globala Ny är fortsatt en platshållare. Inga servicehändelser, dokument, Stripe,
+PDF, externa API:er eller AI ingår.
 Theme i app/globals.css, spacing med 4 px-bas, sidebar från 768 px.
 Laddningsindikering är lokal på submitknappen.
+
+## Fordon och ägarskap
+
+`supabase/migrations/20260913000200_vehicles.sql` körs efter profiles-migrationen.
+Den skapar `vehicles`, `vehicle_ownerships`, normaliseringstrigger, updated_at-trigger,
+constraints, index och följande policies:
+
+- `vehicles_select_active_owner`: SELECT kräver egen aktiv owner-relation utan ended_at.
+- `vehicles_update_active_owner`: samma villkor före och efter UPDATE.
+- `vehicle_ownerships_select_own`: användaren kan läsa egna aktuella och historiska relationer.
+
+Klienter saknar INSERT/DELETE på vehicles och alla skrivrättigheter på ownerships.
+Vehicle UPDATE begränsas till fordonsfält; id, timestamps och extern datakällas
+proveniens är inte klientredigerbara. Ingen redigeringsvy ingår ännu.
+Ownership-policy gör ingen join tillbaka till vehicles, vilket undviker RLS-rekursion.
+
+RPC `create_vehicle` skapar fordon och ownership i samma PostgreSQL-transaktion.
+Den använder enbart `auth.uid()` och har inget user_id-argument. Misslyckad ownership
+rullar tillbaka fordonet. Funktionen är SECURITY DEFINER med tom search_path och
+kvalificerade tabellnamn; endast authenticated har EXECUTE, och null-identitet nekas.
+Ingen service role används. Vanliga klienter kan inte ändra ägare efter skapandet.
+
+`lib/permissions/vehicle.ts` verifierar användaren med requireUser och kontrollerar
+aktiv ägarrelation. Ogiltigt UUID, saknad eller annan ägares relation ger samma
+Not Found. Läsningen efter kontrollen omfattas också av RLS om ägarskap ändras under
+anropet. Databasfel behandlas som fel, aldrig som tomma listor eller godkänd åtkomst.
+`services/vehicles` hanterar databasåtkomst och serverside Zod-validering.
+
+Routes: `/vehicles`, `/vehicles/new`, `/vehicles/[vehicleId]` och minimal `/dashboard`.
+Formuläret behåller inmatning vid fel och visar lokal sparstatus. Fordonsprofilen
+visar en platshållare för framtida historik.
+
+Beslut för denna fas:
+
+- Årtal 1886–2100 i både servervalidering och databas; stabil gräns utan tidsberoende CHECK.
+- Registreringsnummer högst 32 tecken, VIN högst 64, märke/modell 100, bränsle 50.
+  Identifierare normaliseras med versaler och borttagen whitespace; tomma värden blir null.
+  Ingen strikt modern VIN- eller registreringsnummermall och ingen global unikhet införs
+  för obekräftade manuella identifierare. Dubbletter ger aldrig åtkomst till befintliga fordon.
+- Heltalsmiltal i svenska mil, 0–2147483647 enligt PostgreSQL integer. Tomma nummerfält
+  blir null. Ingen mileage_entries skapas; historik läggs till med en senare migration.
+- Partial unique index garanterar en aktiv owner per fordon. Ended/revoked kräver ended_at.
+  Foreign keys använder RESTRICT för att bevara ägarhistorik. Kontoradering för konton
+  med ägarhistorik kräver därför ett separat administrerat bevarandeflöde.
+- Native select används för fordonstyp tillsammans med befintliga shadcn-primitives.
+  Inga nya beroenden eller ändringar i auth-grunden.
+
+Fordonskontroller ingår i `npm test`: Zod/normalisering, service/actions/permissions
+och PostgreSQL-tester i PGlite med två användare. SQL-testerna kör båda migrationerna,
+atomisk rollback vid FK-fel, läs-/skrivisolering, gamla ägares förlorade åtkomst,
+unika aktiva ägare, direkta klientmutationer, constraints och RPC-rättigheter.
+
+Återstår i hostad Supabase-utvecklingsmiljö före produktion:
+
+1. Applicera båda migrationerna och generera databastyper enligt avsnittet ovan.
+2. Logga in som A, skapa fordon med och utan valfria fält; kontrollera listan och profilen.
+3. Logga in som B och prova A:s URL samt direkta Supabase SELECT/UPDATE-anrop.
+4. Försök direkta ownership INSERT/UPDATE/DELETE och RPC med falskt user_id; alla ska nekas.
+5. Bekräfta PostgREST-schema/RPC, riktiga JWT/GoTrue-sessioner och formulärflödet på mobil.
+   PGlite-tester verifierar PostgreSQL men ersätter inte dessa tjänsteintegrationer.
 
 ## Referenser
 
