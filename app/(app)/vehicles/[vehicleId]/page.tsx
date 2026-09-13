@@ -1,15 +1,19 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
-import { EmptyState } from "@/components/empty-state";
+import { ServiceTimeline } from "@/components/service-events/timeline";
+import { getServiceEventsForVehicle } from "@/services/service-events";
 import { RegistrationNumber } from "@/components/vehicles/registration-number";
 import { MileageDisplay } from "@/components/mileage-display";
 import { vehicleTypeLabels } from "@/lib/validation/vehicle";
 import { getVehicleForCurrentUser } from "@/services/vehicles";
 
 export const metadata: Metadata = { title: "Fordon" };
-export default async function VehiclePage({ params }: { params: Promise<{ vehicleId: string }> }) {
-  const vehicle = await getVehicleForCurrentUser((await params).vehicleId);
+export default async function VehiclePage({ params, searchParams }: { params: Promise<{ vehicleId: string }>; searchParams: Promise<{ page?: string }> }) {
+  const { vehicleId } = await params;
+  const requestedPage = Number((await searchParams).page ?? 1);
+  const page = Number.isInteger(requestedPage) && requestedPage >= 1 && requestedPage <= 10000 ? requestedPage : 1;
+  const [vehicle, history] = await Promise.all([getVehicleForCurrentUser(vehicleId), getServiceEventsForVehicle(vehicleId, page)]);
   return <>
     <Link href="/vehicles" className="mb-4 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4">Tillbaka till mina fordon</Link>
     <PageHeader title={`${vehicle.make} ${vehicle.model}`} />
@@ -20,6 +24,6 @@ export default async function VehiclePage({ params }: { params: Promise<{ vehicl
       <div><dt className="mb-2 text-sm text-muted-foreground">Fordonstyp</dt><dd>{vehicleTypeLabels[vehicle.vehicle_type]}</dd></div>
       {vehicle.vin && <div><dt className="mb-2 text-sm text-muted-foreground">VIN / chassinummer</dt><dd className="break-all">{vehicle.vin}</dd></div>}
     </dl>
-    <EmptyState title="Ingen servicehistorik ännu" description="Här kommer du senare att kunna samla fordonets service och reparationer." />
+    <ServiceTimeline vehicleId={vehicle.id} events={history.events} hasMore={history.hasMore} page={page} />
   </>;
 }

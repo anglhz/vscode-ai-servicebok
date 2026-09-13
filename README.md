@@ -159,7 +159,8 @@ Sluttest i separat Supabase-utvecklingsmiljö:
 
 Fordonslistan, manuell registrering och fordonsprofil använder lagrad data.
 Dashboard visar senast skapade aktiva fordon eller en action för att lägga till ett.
-Globala Ny är fortsatt en platshållare. Inga servicehändelser, dokument, Stripe,
+Globala Ny leder till en ny servicehändelse eller ett fordonsval. Fordonsprofilen
+visar servicehistorik med skapa, redigera och soft delete. Inga dokument, Stripe,
 PDF, externa API:er eller AI ingår.
 Theme i app/globals.css, spacing med 4 px-bas, sidebar från 768 px.
 Laddningsindikering är lokal på submitknappen.
@@ -176,7 +177,9 @@ constraints, index och följande policies:
 
 Klienter saknar INSERT/DELETE på vehicles och alla skrivrättigheter på ownerships.
 Vehicle UPDATE begränsas till fordonsfält; id, timestamps och extern datakällas
-proveniens är inte klientredigerbara. Ingen redigeringsvy ingår ännu.
+proveniens är inte klientredigerbara. Servicehistorik-migrationen återkallar även
+direkt UPDATE av current_mileage, eftersom värdet nu beräknas från miltalshistoriken.
+Ingen redigeringsvy för hela fordonet ingår ännu.
 Ownership-policy gör ingen join tillbaka till vehicles, vilket undviker RLS-rekursion.
 
 RPC `create_vehicle` skapar fordon och ownership i samma PostgreSQL-transaktion.
@@ -193,7 +196,7 @@ anropet. Databasfel behandlas som fel, aldrig som tomma listor eller godkänd å
 
 Routes: `/vehicles`, `/vehicles/new`, `/vehicles/[vehicleId]` och minimal `/dashboard`.
 Formuläret behåller inmatning vid fel och visar lokal sparstatus. Fordonsprofilen
-visar en platshållare för framtida historik.
+visar nu tidslinjen från service_events.
 
 Beslut för denna fas:
 
@@ -203,7 +206,7 @@ Beslut för denna fas:
   Ingen strikt modern VIN- eller registreringsnummermall och ingen global unikhet införs
   för obekräftade manuella identifierare. Dubbletter ger aldrig åtkomst till befintliga fordon.
 - Heltalsmiltal i svenska mil, 0–2147483647 enligt PostgreSQL integer. Tomma nummerfält
-  blir null. Ingen mileage_entries skapas; historik läggs till med en senare migration.
+  blir null. Mileage history tillkom i migrationen för servicehistorik nedan.
 - Partial unique index garanterar en aktiv owner per fordon. Ended/revoked kräver ended_at.
   Foreign keys använder RESTRICT för att bevara ägarhistorik. Kontoradering för konton
   med ägarhistorik kräver därför ett separat administrerat bevarandeflöde.
@@ -223,6 +226,108 @@ unika aktiva ägare, direkta klientmutationer, constraints och RPC-rättigheter.
 4. Försök direkta ownership INSERT/UPDATE/DELETE och RPC med falskt user_id; alla ska nekas.
 5. Bekräfta PostgREST-schema/RPC, riktiga JWT/GoTrue-sessioner och formulärflödet på mobil.
    PGlite-tester verifierar PostgreSQL men ersätter inte dessa tjänsteintegrationer.
+
+## Servicehistorik och miltal
+
+Migration `supabase/migrations/20260913000300_service_history.sql` skapar
+`service_events` och `mileage_entries`. Kör den efter de två tidigare migrationerna
+i en utvecklingsmiljö. Ingen hostad databas ändras automatiskt.
+
+Serviceposter har kategorier enligt DATABASE.md, datum, titel, miltal, kostnad i
+ören (endast SEK), utförare, beskrivning, anteckningar, källa och deleted_at.
+Miltalsposter har författare, miltal i mil, tidpunkt, källa och eventuell event-koppling.
+En unik event-koppling och sammansatt foreign key förhindrar dubbla kopplade poster
+eller att en miltalspost hör till ett annat fordon än sin servicehändelse.
+Tidslinjeindex följer vehicle_id, event_date och created_at; mileage-index stödjer
+fordon och event. updated_at använder befintlig trigger.
+
+### Mutationer och säkerhet
+
+- `create_service_event`, `update_service_event` och `soft_delete_service_event`
+  kör atomiskt. Alla använder auth.uid(), kontrollerar aktiv owner och tar inget
+  auktoritativt user_id. Event-id binds alltid till vehicle-id även på databasnivå.
+- Endast authenticated har EXECUTE. SECURITY DEFINER används för att skriva till
+  tabeller där klienten saknar skrivrättigheter. Alla funktioner har tom search_path
+  och kvalificerade tabellnamn; service role används inte.
+- Privata helpers `lock_service_vehicle` och `sync_service_mileage` är inte
+  anropbara av klienter. Mutationerna låser fordonet och den aktiva ägarrelationen
+  före skrivning. Det serialiserar miltalsändringar per fordon och hindrar samtidig
+  återkallelse av ägarskapet mitt i operationen. Ett framtida transferflöde måste
+  följa samma låsordning: vehicle först, ownership därefter.
+- RLS `service_events_select_active_owner` tillåter endast aktiv ägare att läsa
+  ej borttagna händelser. `mileage_entries_select_active_owner` använder samma
+  ägarmodell och döljer rader kopplade till borttagna händelser.
+- Klienter har enbart SELECT på de två tabellerna, inga direkta INSERT/UPDATE/DELETE.
+  Mutationer går genom RPC. created_by_user_id, vehicle_id, source_type, currency
+  och timestamps kan inte ändras genom redigeringsfunktionen.
+- Befintlig requireVehicleAccess återanvänds för all serviceåtkomst på servern.
+  Ogiltig/saknad/borttagen/otillgänglig event-route ger Not Found utan privat data.
+  Råa databasfel och anteckningar visas eller loggas inte.
+
+### Miltalssynkronisering
+
+Migrationen bevarar varje befintligt current_mileage som en manuell grundpost,
+med nuvarande eller senaste ägare och fordonets updated_at som känd tidpunkt.
+Om ett befintligt fordon har miltal men ingen ägarhistorik avbryts migrationen av
+NOT NULL/FK i stället för att tappa grundvärdet. Tabellerna låses under backfill.
+
+create_vehicle behåller signatur och ägarskapskontroll, men registrerar nu även
+angivet initialt miltal i samma transaktion som fordon och ägare. Detta är den
+enda ändringen av skapaflödet utöver att direkt klientuppdatering av den härledda
+current_mileage-kolumnen återkallas. Auth och ownership-policies ändras inte.
+
+Ett event med miltal skapar en länkad mileage_entry. Vid redigering uppdateras
+samma rad och datumet följer event_date (midnatt Europe/Stockholm). Om miltalet
+tas bort avlägsnas dess länkade miltalsrad. Vid soft delete bevaras event och
+länkad rad fysiskt, men de exkluderas från normal läsning och beräkningen.
+Originalförfattarens attribution bevaras även när en senare ägare redigerar.
+
+Efter varje mutation är current_mileage MAX av fristående poster och poster
+kopplade till ej borttagna events, eller null om inga relevanta poster finns.
+Ett gammalt event vid 8 500 mil sänker därför aldrig en grundpost på 12 000 mil.
+Om ett event vid 15 000 mil tas bort återgår värdet till högsta återstående post.
+Alla steg rullas tillbaka om någon del misslyckas. Manuella mätarställningskorrigeringar
+är inte ett separat flöde i denna uppgift; grundposten ska inte raderas från klienten.
+
+### UI och beslut
+
+- Routes `/vehicles/[vehicleId]/events/new` och `/vehicles/[vehicleId]/events/[eventId]`.
+  Redigering använder samma route med `?edit=1` och samma formulärkomponent.
+- Fordonsprofilen visar tidslinje, nyast event_date först, därefter created_at och
+  id som stabil tredje sortering. Enkel sidindelning med 30 poster förhindrar att
+  äldre historik kapas tyst av Supabases gräns. Nyare/äldre länkar finns vid behov.
+- `/new`: noll fordon ger Lägg till fordon, ett fordon leder direkt till formuläret,
+  flera ger ett enkelt fordonsval. Dashboard behåller sin begränsade fordonsöversikt.
+- Datum föreslås som dagens svenska datum, kategori Service och miltal från fordonet.
+  Miltal kan lämnas tomt eller ersättas med lägre historiskt värde.
+- Datum 1886-01-01–2100-12-31 accepteras; framtida datum inom intervallet blockeras inte.
+  Titel/utförare högst 150 tecken, beskrivning/anteckningar 5 000.
+- Kostnad anges i kronor med punkt eller komma och högst två decimaler, utan
+  tusentalsavskiljare. `kronorToOre` använder decimaltext och BigInt, aldrig
+  flyttalsmultiplikation. Gräns 21 474 836,47 kr motsvarar PostgreSQL integer i ören.
+- Mer information innehåller sekundära fält. Valideringsfel bevarar inmatning,
+  submit visar lokal status och borttagning kräver separat bekräftelse.
+- Inga nya beroenden, dokument, lookup, transfer, serviceintervall, Stripe, PDF,
+  AI eller service_event_items ingår. Inga fabricerade genererade databastyper.
+
+### Verifiering och kvarstående integration
+
+`npm test` omfattar pengar, datum, validering, services/actions och PGlite med
+samtliga tre migrationer. SQL-testerna täcker A/B-isolering, avslutat ägarskap,
+klientmutationer, privata funktionsrättigheter, baseline/backfill, skapa/redigera/
+soft delete, max-omräkning, null/0 och rollback om slutuppdateringen misslyckas.
+Typecheck, lint och produktionsbygge körs separat.
+
+Lokal webbläsarkontroll använder API-testdata vid 320, 390 och 1280 px för formulär,
+tidslinje, detalj, redigering, bekräftad borttagning, tomt läge och globala Ny.
+Den ersätter inte riktig Supabase-integration. Före produktion behövs:
+
+1. Applicera migrationen i Supabase-utvecklingsinstansen och generera databastyper.
+2. Testa riktiga sessioner/JWT och PostgREST-RPC med två konton, inklusive direkta
+   otillåtna SELECT/INSERT/UPDATE/DELETE-anrop och avslutad ownership.
+3. Testa samtidiga händelseändringar och kontrollera låsning/omräkning i hostad PostgreSQL.
+4. Genomför skapa, redigera och ta bort på mobil med riktig data; verifiera att
+   grundmiltal och tidigare historik bevaras. Ingen återställnings-UI för borttagna poster ingår.
 
 ## Referenser
 
