@@ -460,9 +460,137 @@ RLS med A/B, förlorat ägarskap, expired tokens, direkt Storage overwrite/sign/
 borttagen event under upload samt fysisk radering och återförsök efter Storage-fel.
 Ingen hostad databas har migrerats och inga genererade typer har fabricerats.
 
+## Fordonslookup
+
+`/vehicles/new` erbjuder Sök fordon och Lägg till manuellt. Sökningen skapar aldrig
+ett fordon: förhandsvisningen måste först bekräftas med Lägg till fordon. Användaren
+kan korrigera märke, modell, årsmodell, miltal i mil, bränsle och fordonstyp.
+Registreringsnummer och VIN är låsta vid lookup, både i UI och vid serversparande.
+För att använda andra identifierare väljer användaren manuell registrering, utan
+extern proveniens. Befintlig ownership-kontroll gäller i båda fallen.
+
+### Provider och konfiguration
+
+`services/vehicle-data/provider.ts` definierar VehicleProvider med
+`lookupByRegistrationNumber`. `types.ts` är den interna modellen och
+`normalizers/http.ts` översätter adapterfält till våra fältnamn. UI och vehicles
+är oberoende av externa svar. Ingen namngiven kommersiell leverantör har valts eller
+liveanslutits i denna PR; `http-json` är en konfigurerbar HTTP-adapter med följande
+uttryckliga kontrakt, inte en utfästelse om kompatibilitet med valfritt fordons-API.
+När leverantör och dokumentation finns implementeras dess adapter bakom samma interface.
+Produktionskod innehåller inga exempelregistreringar eller mockfordon.
+
+Alla variabler nedan är server-only och valfria för manuell registrering:
+
+| Variabel | Användning |
+| --- | --- |
+| `VEHICLE_PROVIDER` | `http-json` aktiverar HTTP-adaptern; tomt eller okänt värde stänger av lookup. |
+| `VEHICLE_API_BASE_URL` | Betrodd HTTPS-basadress till en tjänst som uppfyller kontraktet. |
+| `VEHICLE_API_KEY` | Skickas endast från servern som Bearer-header. |
+| `VEHICLE_LOOKUP_SIGNING_SECRET` | Slumpmässig hemlighet med minst 32 bytes, samma värde i servermiljön och databasens privata konfiguration. |
+
+Inga variabler har NEXT_PUBLIC-prefix. Konfigurera separata nycklar för lokal,
+preview och produktion. Instanser som delar databas måste använda samma signeringsnyckel.
+Nyckelbyte ogiltigförklarar tidigare förhandsvisningar; användaren kan söka igen.
+HTTP till localhost är endast tillåtet utanför production. URL från klienten,
+credentials/query/fragment i basadressen och HTTP-redirects accepteras inte.
+
+Adaptern skickar `GET <base>/vehicles/<normaliserat registreringsnummer>` med
+`Authorization: Bearer <VEHICLE_API_KEY>` och `Accept: application/json`.
+200-svaret ska vara JSON med ett `vehicle`-objekt:
+
+| Externt fält | Typ och betydelse |
+| --- | --- |
+| registrationNumber, make, model, vehicleType | Obligatoriska strängar. Fordonstyp är car, motorcycle, moped, motorhome, caravan eller other. |
+| vin, fuelType, color, id | Valfria strängar eller null. id blir external_provider_id. |
+| modelYear, vehicleYear, powerKw | Valfria heltal eller null. År 1886–2100, effekt i kW ≥ 0. |
+| firstRegistrationDate | Valfritt giltigt ISO-datum YYYY-MM-DD eller null. |
+
+Registreringsnummer normaliseras med befintlig helper (`abc 123` → `ABC123`).
+Lookup accepterar 2–32 alfanumeriska tecken efter normalisering; manuell registrering
+behåller tidigare friare regler för äldre/andra fordon. VIN normaliseras också.
+Ett svar för ett annat registreringsnummer nekas. Stränglängder, kontrolltecken,
+år, effekter, datum, externa svar och den interna modellen valideras med Zod.
+Okända råfält, inklusive eventuell ägarinformation, sparas eller returneras inte.
+Extern MIME/JSON kontrolleras och svaret begränsas till 64 KiB även vid streaming.
+
+Server action `searchVehicle` verifierar requireUser innan provideranrop. Request och
+body har fem sekunders timeout; ingen automatisk retry eller refresh görs. 404,
+429, timeout, nätverksfel, felaktiga svar och providerfel ger svenska meddelanden
+och manuell fallback utan rå feltext. Lookup har högst tio försök per användare
+och minut per serverprocess. Räknaren rymmer högst 1 000 aktiva användare och nekar
+ytterligare lookup vid full kapacitet. Omstart/flera serverless-instanser gör att
+detta inte är en global kvot: konfigurera även leverantörens kontokvot/kostnadsgräns
+före publik drift. Ingen ny generell rate-limit-infrastruktur införs.
+
+### Migration, proveniens och säkerhet
+
+Kör `supabase/migrations/20260913000500_vehicle_lookup.sql` efter dokumentmigrationen
+i en utvecklingsmiljö. Den använder pgcrypto/HMAC-SHA256 i `extensions`; om pgcrypto
+redan är installerat i annat schema behövs administrerad anpassning före migration.
+Ingen hostad databas ändras av PR:en.
+
+Migrationen skapar `private.vehicle_lookup_config` med en singleton-rad och
+`signing_secret`. Den har RLS utan klientpolicies och inga rättigheter för
+public/anon/authenticated; private ska inte exponeras som API-schema. Lägg separat
+in samma slumpmässiga hemlighet som serverns `VEHICLE_LOOKUP_SIGNING_SECRET` genom
+en betrodd administrativ databasanslutning. Ett parameteriserat administrationsanrop är:
+
+```sql
+insert into private.vehicle_lookup_config(singleton, signing_secret)
+values (true, $1)
+on conflict (singleton) do update set signing_secret = excluded.signing_secret;
+```
+
+Bind $1 till den hemliga strängen via administrationsverktyget; lägg aldrig värdet i
+migrationsfil, Git, klientkod eller logg. Ingen service role används i appen. Utan
+konfiguration fungerar manuell registrering, men lookup-resultat kan inte sparas.
+
+Förhandsvisningen bär ett signerat kvitto som binder normaliserad data, auth-user,
+hämtningstid och 15 minuters utgångstid. Det innehåller fordonsförslaget, inte någon
+API-nyckel eller privat servicehistorik, och ska inte loggas. Både servern och RPC
+verifierar kvittot och att registreringsnummer/VIN är oförändrade. Databasens privata
+verifieringsfunktion kan inte anropas av klienter. Detta hindrar även direkta RPC-anrop
+från att förfalska external_provider eller external_data_fetched_at.
+
+`create_vehicle` får ett nytt valfritt sista argument `p_lookup_receipt`; tidigare
+åtta argument fungerar fortfarande utan kvitto. Funktionen ersätts, inte överlagras.
+Den använder fortfarande auth.uid(), SECURITY DEFINER, tom search_path och atomisk
+vehicle + ownership + initial mileage_entry. Extra fordonskolumner fanns redan och
+fylls nu från signerat underlag. Inga godtyckliga provenance-argument accepteras.
+Användarens tillåtna korrigeringar sparas, medan proveniensen anger källan till det
+ursprungliga förslaget; den är ingen garanti om fordonsidentitet eller äganderätt.
+
+Triggern `vehicles_validate_identifiers` kör efter befintlig normalisering och
+nekar nya matchande VIN/registreringsnummer med ett generiskt fel. Den gäller även
+direkta behöriga identifieraruppdateringar och använder ett transaktionslås för att
+serialisera kontrollen. Befintliga index återanvänds. Historiska dubbletter raderas,
+slås ihop eller överförs inte; normala uppdateringar utan identifierarändring fungerar.
+Manuella felregistreringar kan därmed blockera ett senare legitimt skapande och behöver
+administrativ utredning tills ett separat transferflöde finns. Ingen matchning ger
+ägarskap, fordons-id, namn på ägare eller servicehistorik till den sökande.
+
+Efter sparande ligger normaliserade data och proveniens i vehicles. Vanliga appvyer
+läser enbart databasen. Ingen providerfråga per sidvisning, automatisk uppdatering,
+ägaröverföring eller serviceintervall införs.
+
+### Verifiering och återstående tester
+
+`npm test` täcker provider-normalisering, timeout, fel/fallback, begränsning,
+bekräftelse och signaturer samt PostgreSQL/RLS med alla fem migrationer och riktig
+pgcrypto i PGlite. A/B-isolering, dubbletter, direkt RPC-förfalskning, hemlighetens
+privilegier, manuell registrering och atomisk rollback testas. Typecheck, lint och
+build körs separat. Webbläsartester använder lokal HTTPS-provider och Auth/RPC-testdata.
+
+Före livebruk återstår namngiven leverantör, avtal/kvot, riktig API-nyckel och kontroll
+av dess verkliga datakontrakt. Testa migration, hemlighetskonfiguration, riktiga
+sessioner/PostgREST, samtidiga registreringar och identifieraruppdateringar i hostad
+Supabase. PGlite verifierar SQL/pgcrypto men ersätter inte hela Supabase-tjänsten.
+
 ## Referenser
 
 - [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client)
+- [PostgreSQL pgcrypto och HMAC](https://www.postgresql.org/docs/18/pgcrypto.html)
 - [Supabase användardata](https://supabase.com/docs/guides/auth/managing-user-data)
 - [Signerad uppladdning och tokenlivslängd](https://supabase.com/docs/reference/javascript/file-buckets-createsigneduploadurl)
 - [Signerad nedladdning](https://supabase.com/docs/reference/javascript/file-buckets-createsignedurl)

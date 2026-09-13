@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { createVehicleSchema, type VehicleFormState } from "@/lib/validation/vehicle";
-import { createVehicle } from "@/services/vehicles";
+import { createVehicle, DuplicateVehicleError, InvalidVehicleLookupError } from "@/services/vehicles";
+import { lookupVehicle } from "@/services/vehicle-data";
+
+export async function searchVehicle(registration: string) { return lookupVehicle(registration); }
 
 export async function saveVehicle(_state: VehicleFormState, formData: FormData): Promise<VehicleFormState> {
   await requireUser();
@@ -12,8 +15,14 @@ export async function saveVehicle(_state: VehicleFormState, formData: FormData):
   const parsed = createVehicleSchema.safeParse(input);
   if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors };
   let vehicleId: string;
-  try { vehicleId = await createVehicle(input); }
-  catch { return { message: "Fordonet kunde inte sparas. Försök igen." }; }
+  const receipt = formData.get("lookup_receipt");
+  if (receipt && (typeof receipt !== "string" || formData.get("confirmed") !== "yes")) return { message: "Bekräfta fordonsuppgifterna innan du sparar." };
+  try { vehicleId = await createVehicle(input, typeof receipt === "string" ? receipt : undefined); }
+  catch (error) {
+    if (error instanceof DuplicateVehicleError) return { message: "Fordonet finns redan registrerat i Servicebok. Ingen åtkomst har ändrats." };
+    if (error instanceof InvalidVehicleLookupError) return { message: "Sökningen har gått ut eller ändrats. Sök igen eller lägg till fordonet manuellt." };
+    return { message: "Fordonet kunde inte sparas. Försök igen." };
+  }
   revalidatePath("/vehicles");
   revalidatePath("/dashboard");
   redirect(`/vehicles/${vehicleId}`);
