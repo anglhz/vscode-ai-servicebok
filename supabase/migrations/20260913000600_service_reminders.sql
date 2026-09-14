@@ -61,9 +61,9 @@ language sql immutable set search_path = '' as $$
   with values_left as (select p_date - p_today as days, p_mileage - p_current as miles),
   ranked as (select days, miles, case
     when days < 0 or miles < 0 then 'overdue'
-    when days between 0 and 30 or miles between 0 and coalesce(ceil(p_distance * 0.1)::integer, 500) then 'due_soon'
     when (p_expect_date and days is null) or (p_expect_mileage and miles is null)
       or (days is null and miles is null) then 'unknown'
+    when days between 0 and 30 or miles between 0 and coalesce(ceil(p_distance * 0.1)::integer, 500) then 'due_soon'
     else 'ok' end as state from values_left)
   select state, days, miles, case state when 'overdue' then 0 when 'due_soon' then 1 when 'ok' then 2 else 3 end from ranked;
 $$;

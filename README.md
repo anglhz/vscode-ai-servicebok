@@ -612,15 +612,16 @@ Samma funktion används av båda vyerna; frontend formaterar bara resultatet.
 | Status | Regel |
 | --- | --- |
 | overdue / Försenad | Minst en känd gräns har passerats: dagar < 0 eller mil < 0. |
-| due_soon / Snart dags | Ingen känd gräns är passerad, men 0–30 dagar återstår eller 0–ceil(distance_interval × 0,10) mil återstår. |
-| unknown / Uppgifter saknas | Ingen känd gräns är försenad/snart, men någon konfigurerad gräns saknar utgångsvärde eller aktuellt miltal. Även helt okända gränser är unknown. |
+| unknown / Uppgifter saknas | Ingen känd gräns är försenad, men någon konfigurerad gräns saknar utgångsvärde eller aktuellt miltal. Även helt okända gränser är unknown. |
+| due_soon / Snart dags | Alla konfigurerade gränser kan bedömas och ingen är passerad, men 0–30 dagar återstår eller 0–ceil(distance_interval × 0,10) mil återstår. |
 | ok / Kommande | Alla konfigurerade gränser kan bedömas och ligger längre bort. |
 
 För egna påminnelser utan körsträckeintervall används 500 mil som snart-gräns.
 Precis på förfallodagen eller förfallomiltalet visas Snart dags med Idag/Dags nu;
 Försenad används först när gränsen passerats. Med två gränser gäller den som nås
-först. En känd försenad/snart gräns väger därför tyngre än en okänd andra gräns,
-men en känd framtida gräns räcker inte för att kalla ett delvis okänt intervall ok.
+först. Status bedöms i ordningen overdue, unknown, due_soon, ok. En känd försenad
+gräns väger tyngre än en okänd andra gräns. Om ingen gräns är försenad och en
+konfigurerad gräns är okänd visas Uppgifter saknas, även om den kända gränsen är snart.
 Detta är påminnelsetrösklar, inte tillverkarrekommendationer.
 
 Listor sorteras efter Försenad, Snart dags, Kommande, Uppgifter saknas; inom samma

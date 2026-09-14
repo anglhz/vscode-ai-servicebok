@@ -67,6 +67,18 @@ describe("central service due/status calculation",()=>{
     const result=await db.query("select * from public.service_due_status($1,$2,$3,$4,$5,$6,date '2026-09-13')",[date,mileage,current,expectDate,expectMileage,distance]);
     expect(result.rows[0]).toMatchObject({urgency:state});
   });
+  it("returns unknown for a combined interval with missing date and mileage due soon",async()=>{
+    const result=await db.query("select * from public.service_due_status(null,11420,11120,true,true,3000,date '2026-09-13')");
+    expect(result.rows[0]).toMatchObject({urgency:"unknown",remaining_days:null,remaining_mileage:300});
+  });
+  it("returns unknown for a combined interval with missing mileage and date due within 30 days",async()=>{
+    const result=await db.query("select * from public.service_due_status(date '2026-10-13',null,10840,true,true,3000,date '2026-09-13')");
+    expect(result.rows[0]).toMatchObject({urgency:"unknown",remaining_days:30,remaining_mileage:null});
+  });
+  it("returns overdue for a combined interval with an overdue date and missing mileage",async()=>{
+    const result=await db.query("select * from public.service_due_status(date '2026-09-12',null,10840,true,true,3000,date '2026-09-13')");
+    expect(result.rows[0]).toMatchObject({urgency:"overdue",remaining_days:-1,remaining_mileage:null});
+  });
   it("uses Swedish calendar days across midnight and DST",async()=>{
     await db.exec("set timezone='America/Los_Angeles'");
     const result=await db.query("select (timestamptz '2026-03-29 22:30:00+00' at time zone 'Europe/Stockholm')::date::text as day, (date '2026-03-30'-date '2026-03-29') as days");
