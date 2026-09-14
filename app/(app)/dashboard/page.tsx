@@ -6,6 +6,8 @@ import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { VehicleCard } from "@/components/vehicles/vehicle-card";
 import { getVehiclesForCurrentUser } from "@/services/vehicles";
+import { Suspense } from "react";
+import { UpcomingReminders } from "@/components/service-plan/upcoming";
 
 export const metadata: Metadata = { title: "Hem" };
 
@@ -17,5 +19,6 @@ export default async function DashboardPage() {
       <EmptyState icon={<CarFront className="size-6" />} title="Välkommen till Servicebok"
         description="Lägg till ditt första fordon för att komma igång."
         action={<Button asChild className="min-h-12"><Link href="/vehicles/new">Lägg till fordon</Link></Button>} />}
+    {vehicle && <Suspense fallback={<p className="mt-6 text-sm text-muted-foreground">Hämtar påminnelser…</p>}><UpcomingReminders /></Suspense>}
   </>;
 }

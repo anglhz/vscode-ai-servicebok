@@ -7,6 +7,8 @@ import { RegistrationNumber } from "@/components/vehicles/registration-number";
 import { MileageDisplay } from "@/components/mileage-display";
 import { vehicleTypeLabels } from "@/lib/validation/vehicle";
 import { getVehicleForCurrentUser } from "@/services/vehicles";
+import { Suspense } from "react";
+import { NextService } from "@/components/service-plan/upcoming";
 
 export const metadata: Metadata = { title: "Fordon" };
 export default async function VehiclePage({ params, searchParams }: { params: Promise<{ vehicleId: string }>; searchParams: Promise<{ page?: string }> }) {
@@ -25,6 +27,7 @@ export default async function VehiclePage({ params, searchParams }: { params: Pr
       {vehicle.vin && <div><dt className="mb-2 text-sm text-muted-foreground">VIN / chassinummer</dt><dd className="break-all">{vehicle.vin}</dd></div>}
     </dl>
     <Link href={`/vehicles/${vehicle.id}/documents`} className="mb-6 inline-flex min-h-12 items-center text-primary underline underline-offset-4">Visa dokument</Link>
+    <Suspense fallback={<p className="my-6 text-sm text-muted-foreground">Hämtar serviceplan…</p>}><NextService vehicleId={vehicle.id} /></Suspense>
     <ServiceTimeline vehicleId={vehicle.id} events={history.events} hasMore={history.hasMore} page={page} />
   </>;
 }

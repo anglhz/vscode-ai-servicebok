@@ -9,6 +9,7 @@ import { createServiceEvent, updateServiceEvent, deleteServiceEvent } from "@/se
 function refresh(vehicleId: string) {
   revalidatePath(`/vehicles/${vehicleId}`, "layout");
   revalidatePath("/vehicles"); revalidatePath("/dashboard"); revalidatePath("/new");
+  revalidatePath("/reminders");
 }
 export async function saveEvent(vehicleId: string, eventId: string | null, _state: ServiceEventFormState, form: FormData): Promise<ServiceEventFormState> {
   await requireVehicleAccess(vehicleId);
