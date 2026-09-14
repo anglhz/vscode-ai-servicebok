@@ -85,7 +85,8 @@ Testa SMTP, bekräftelse och rate limits i utvecklingsprojektet före produktion
   lösenord. Login tillåter även äldre kortare lösenord. Inget lösenord trimmas.
 - Formulär behåller inmatning vid fel. Lösenord returneras aldrig i action-state.
   Råa auth-fel, tokens och lösenord loggas inte.
-- Redirects är fasta interna routes. Godtyckliga next-parametrar används inte.
+- Redirects är fasta interna routes, med en strikt validerad överföringsroute som
+  fortsättning efter inloggning. Godtyckliga next-parametrar används inte.
 - Logout återkallar aktuell session, rensar SDK-cookies och invaliderar routercache.
   Andra enheter påverkas inte. Redan utfärdade JWT:er kan vara giltiga till utgång;
   använd rimlig tokenlivslängd i Supabase.
@@ -252,8 +253,8 @@ fordon och event. updated_at använder befintlig trigger.
 - Privata helpers `lock_service_vehicle` och `sync_service_mileage` är inte
   anropbara av klienter. Mutationerna låser fordonet och den aktiva ägarrelationen
   före skrivning. Det serialiserar miltalsändringar per fordon och hindrar samtidig
-  återkallelse av ägarskapet mitt i operationen. Ett framtida transferflöde måste
-  följa samma låsordning: vehicle först, ownership därefter.
+  återkallelse av ägarskapet mitt i operationen. Ägaröverföringen följer
+  samma låsordning: vehicle först, ownership därefter.
 - RLS `service_events_select_active_owner` tillåter endast aktiv ägare att läsa
   ej borttagna händelser. `mileage_entries_select_active_owner` använder samma
   ägarmodell och döljer rader kopplade till borttagna händelser.
@@ -372,6 +373,10 @@ Dokumentkopplingens trigger nekar olika vehicle-id även vid privilegierade inse
 Klienter har ingen direkt skrivrätt till metadata eller kopplingar.
 
 ### RLS och Storage-policies
+
+Ägaröverföringsmigrationen skärper nedanstående dokumentåtkomst till aktiv owner
+som själv laddat upp filen eller fått den via explicit accepterad transfer.
+Samma regel gäller metadata, Storage och cleanup; se Säker ägaröverföring nedan.
 
 - `documents_select_active_owner` visar endast ready, ej borttagna dokument för
   aktiv owner. `service_event_documents_select_active_owner` kräver synligt dokument
@@ -703,10 +708,153 @@ databas har ändrats här. SQL-vyerna kräver PostgreSQL med security_invoker-st
 
 Avfärdade påminnelser och tidigare utföranden har ingen separat historikvy; den senaste
 manuella baslinjen ersätter den gamla i serviceplanen, medan riktiga servicehändelser
-bevaras i befintlig historik. Ett framtida transferflöde behöver besluta om mottagarens
-reminders: gamla ägarens åtkomst försvinner direkt, men ingen bakgrundsöverföring skapas.
-När en aktiv ny ägare uttryckligen sparar/utför intervallet synkas den enda kopplade
-remindern till den användaren. Egna reminders överförs aldrig av detta flöde.
+bevaras i befintlig historik. Ägaröverföringen nedan flyttar kopplade reminders till
+mottagaren atomiskt. Egna personliga reminders följer aldrig med.
+
+## Säker ägaröverföring
+
+Migration `supabase/migrations/20260914000700_vehicle_transfers.sql` körs efter
+service reminders. Den skapar `vehicle_transfers` och `vehicle_transfer_documents`
+med RLS, index, constraints och kontrollerade RPC-funktioner. Ingen hostad miljö
+ändras automatiskt och inga nya appberoenden eller service role behövs.
+
+### Token och livscykel
+
+- `create_vehicle_transfer` genererar 32 kryptografiskt slumpmässiga bytes på
+  databasservern med pgcrypto `gen_random_bytes`, representerade som 64 hextecken.
+  Bara SHA-256-hashen sparas i `token_hash`. Klartext returneras en enda gång från
+  skapandet. Appservern bygger länken från betrodd `APP_URL`; klienten kan inte
+  bestämma basadress, token, säljare eller giltighetstid.
+- Länken gäller sju dagar. Token finns bara i skapandesvarets lokala komponentstate;
+  efter omladdning/sidbyte behöver säljaren avbryta och skapa en ny om länken saknas.
+  Webbläsarens kopierade länk kan naturligtvis delas med den avsedda mottagaren.
+- Högst en pending-rad per fordon tillåts av ett partial unique index. Utgångna
+  pending-rader markeras expired när en ny skapas. Vid läsning visas de som expired
+  och accept kontrollerar alltid verklig tid efter låsning; ingen cron behövs.
+- Säljaren får läsa sina statusrader, men SELECT av `token_hash` nekas även säljaren.
+  Mottagaren kan inte generellt läsa tabellen. `preview_vehicle_transfer` kräver
+  auth.uid och rätt tokenhash och returnerar enbart status, märke, modell,
+  registreringsnummer, giltighet, dokumentantal och en flagga för egen överföring.
+- Direkt INSERT/UPDATE/DELETE på båda tabellerna är återkallat. Alla publika RPC
+  kräver authenticated och verifierar auth.uid; SECURITY DEFINER har tom search_path.
+  Ingen operation accepterar ett auktoritativt user_id från klienten.
+
+### Atomiskt ägarbyte och samtidighet
+
+`accept_vehicle_transfer` låser vehicle → aktiv ownership → transfer i samma
+ordning som service-, dokument- och intervallmutationerna. Status, hash, utgång,
+självaccept och den ursprungliga aktiva ownership-raden verifieras under lås.
+`from_ownership_id` hindrar en gammal länk från att fungera om samma säljare senare
+återkommer som ägare under en ny period.
+
+Gamla relationen får ended/ended_at, en ny active owner skapas och överföringen
+får accepted, to_user_id, to_ownership_id och accepted_at i samma transaktion.
+Det unika active owner-indexet behålls; det finns aldrig två aktiva ägare.
+Misslyckas ett steg rullas hela operationen tillbaka. Konkurrerande accepteringar
+väntar och bara en kan lyckas. Cancel använder samma vehicle-lås och kan bara
+avbryta säljarens pending-transfer. Accepterade överföringar kan inte avbrytas.
+
+Överföringsraden med tidsstämplar och båda ownership-id:n, dokumentvalet och de
+bevarade ownership-perioderna utgör revisionsspåret. Ingen separat generell
+audit-logg eller ny vy över tidigare ägares personuppgifter införs.
+Fordon, service_events, mileage_entries och service_intervals kopieras aldrig.
+De behåller samma vehicle_id. Befintlig RLS tar omedelbart bort säljarens aktiva
+läs-/skrivåtkomst och ger den till mottagaren efter commit.
+
+### Privata dokument
+
+Standard är **inga privata dokument**. Säljaren väljer uttryckligen dokument och
+bekräftar därefter överföringen. Högst 100 dokument väljs per överföring; endast
+ready, ej borttagna och för säljaren åtkomliga dokument från samma fordon godtas.
+En databastrigger skyddar även kopplingar mellan olika fordon vid privilegierade inserts.
+
+`visibility_scope` och ursprunglig uppladdare ändras aldrig. En accepterad
+transferrelation ger dokumentåtkomst för just mottagarens `to_ownership_id`.
+För fortsatt åtkomst krävs alltid den aktiva ägarrelationen. Dokument måste
+väljas igen vid nästa överföring, även om de tidigare mottagits från någon annan.
+Gamla transfergrants återupplivas inte om en tidigare mottagare senare återkommer.
+Egna uppladdade dokument kräver också aktiv ownership; gammal ownership räcker aldrig.
+
+`document_access_granted` används av metadata-RLS och Storage-helpern. Dolda dokument
+kan inte läsas, signeras eller röjas via eventkopplingar, radering eller cleanup-RPC.
+Uppladdning/finalize är fortfarande bundet till den ursprungliga uppladdaren och
+aktiv ägare. En vald fil som raderas före accept återuppstår inte. Ny ägare kan
+läsa och hantera valda dokument; icke valda filer är fortsatt privata.
+
+Signerad nedladdning använder befintliga 300 sekunder och kontrollerar både
+metadata-RLS och Storage-RLS vid utfärdande. **En redan utfärdad signerad URL kan
+fungera tills dess giltighet löper ut även efter ett ägarbyte.** Ägarbytet kan inte
+återkalla en redan nedladdad kopia. Nya signerade URL:er nekas direkt för säljaren.
+Tidigare uppladdningstokens kan även leva till utgång, men kan inte finalize:a
+eller göra en fil synlig efter att ägarskapet upphört.
+
+Icke valda dokument bevaras utan att nästa ägare får åtkomst. Övergivna uppladdningar
+och gamla privata filer utan behörig aktiv uppladdare behöver separat administrerad
+retention/städning. Den nya ägarens cleanup får inte röja eller radera dem.
+
+### Påminnelser
+
+Kopplade servicepåminnelser behåller id, förfallo och status, men får mottagarens
+user_id inom accept-transaktionen. Inaktiva/avfärdade intervall återaktiveras inte.
+Aktiva personliga reminders blir dismissed och behåller gamla user_id; redan
+avslutade personliga reminders behåller status. De blir aldrig synliga för mottagaren.
+Serviceintervall ligger kvar och kan ändras av den nya ägaren.
+
+### Routes och inloggning
+
+- Fordonsprofilens Ägarskap länkar till `/vehicles/[vehicleId]/transfer`.
+  Säljaren ser dokumentval, varning, separat bekräftelse, en engångsvisad länk,
+  giltighetstid och bekräftad avbrytning. Det sker ingen optimistisk ägarändring.
+- `/transfer/[token]` är dynamisk. Oinloggade ser en generisk förklaring och
+  inloggningsval; ingen fordons-, ägar-, dokument- eller historikdata hämtas åt dem.
+  Efter login visas begränsad fordonsinformation och antal dokument, aldrig filnamn
+  eller innehåll före accept. Mottagaren måste uttryckligen bekräfta.
+- `/transfer/[token]/continue` sparar en strikt validerad token i en HttpOnly,
+  SameSite=Lax-cookie (Secure i produktion), max sju dagar, och skickar till enbart
+  `/login` eller `/signup` på APP_URL. Inga godtyckliga next-parametrar tillåts.
+  Efter lyckad login eller omedelbar signup-session förbrukas cookien och samma
+  transferroute öppnas. Vid e-postbekräftelse förbrukas den först efter lyckad PKCE.
+  E-postens callback-URL är fortfarande exakt APP_URL + `/auth/callback` utan token.
+  Bekräftelse behöver öppnas i samma webbläsare; annars får mottagaren öppna
+  överföringslänken igen efter inloggning. Ingen accept sker genom GET/login.
+- Accept leder till befintliga `/vehicles/[vehicleId]?transferred=1` med bekräftelse
+  och invaliderar appens routercache. Ogiltig, utgången, avbruten och använd länk
+  ger begripliga tillstånd. Fel innehåller aldrig token eller rå databastext.
+
+Transferroutes har private/no-store, no-referrer och noindex/nofollow/noarchive.
+Det finns inga analytics på dem. Next:s lokala requestlogg undantar transferpaths
+och funktionsargument loggas inte. Konfigurera även Vercel/proxy/observability att
+maskera hela tokensegmentet och cookies; applikationskoden styr inte plattformens
+åtkomstloggar. Lägg aldrig överföringslänkar i publika ärenden eller skärmbilder.
+
+### Verifiering
+
+`npm test` kör PostgreSQL/PGlite med alla sju migrationer samt tester för
+serverfunktioner, validering, identitet, dokumentval, privat Storage, vidareöverföring,
+rollback och auth-fortsättning. Typecheck, lint och build körs separat.
+Vid denna implementation passerade 278 tester (40 nya), alla tre kontroller och
+de tre separata samtidighetstesterna nedan.
+
+`tests/vehicle-transfer-concurrency.mjs` kör dessutom tre tester med separata
+anslutningar till vanlig lokal PostgreSQL: två acceptförsök, cancel mot accept,
+och serviceändring mot accept. Testet observerar riktiga låsväntningar och skapar
+och raderar endast sin egen slumpmässigt namngivna testdatabas. En isolerad lokal
+PostgreSQL och npm-paketet `pg` behövs i testverktygsmiljön, inte som appberoenden:
+
+```powershell
+$env:TRANSFER_TEST_PG_MODULE = 'C:\path\to\test-tools\node_modules\pg'
+$env:TRANSFER_TEST_DATABASE_URL = 'postgres://postgres@127.0.0.1:55439/postgres'
+node --test tests/vehicle-transfer-concurrency.mjs
+```
+
+Lokal webbläsarverifiering använder riktiga SQL/RLS-operationer med en Auth/PostgREST-
+testadapter vid 320, 390 och 1280 px. Före produktion återstår migration i hostad
+Supabase, riktiga A/B/C-sessioner/JWT, PKCE och SMTP i samma browser, PostgRESTs
+kolumnprivilegier, Storage-signering samt redan utfärdade URL:er efter transfer.
+Verifiera även loggmaskering, backup/retention och samtidighet under verklig trafik.
+Länken är en bearer capability: vem som har länken och ett inloggat konto kan
+acceptera. Ingen myndighetsverifiering, mottagarbindning, e-post/SMS, betalning,
+familjedelning eller claim discovery införs.
 
 ## Referenser
 

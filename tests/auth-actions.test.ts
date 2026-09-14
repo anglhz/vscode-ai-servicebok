@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined, has: () => false, delete: vi.fn() }) }));
 
 const mocks = vi.hoisted(() => ({ signInWithPassword: vi.fn(), signUp: vi.fn(), signOut: vi.fn(), revalidate: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ auth: mocks }) }));
