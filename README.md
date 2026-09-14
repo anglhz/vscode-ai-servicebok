@@ -587,6 +587,126 @@ av dess verkliga datakontrakt. Testa migration, hemlighetskonfiguration, riktiga
 sessioner/PostgREST, samtidiga registreringar och identifieraruppdateringar i hostad
 Supabase. PGlite verifierar SQL/pgcrypto men ersätter inte hela Supabase-tjänsten.
 
+## Serviceplan och påminnelser
+
+Migration `supabase/migrations/20260913000600_service_reminders.sql` körs efter
+lookup-migrationen. Den skapar `service_intervals`, `reminders`, index, RLS,
+mutationsfunktioner och två vyer. Inga nya miljövariabler, npm-beroenden eller
+service role behövs. Ingen hostad databas migreras automatiskt.
+
+### Beräkning och exakta statusregler
+
+PostgreSQL-funktionen `service_due` är gemensam för serviceplanen och synkningen:
+
+- nästa datum = last_completed_date + month_interval kalendermånader;
+- nästa miltal = last_completed_mileage + distance_interval, i svenska mil;
+- utan utgångsvärde eller motsvarande intervall blir den gränsen null;
+- månadsslut begränsas till sista giltiga dagen: 31 januari + en månad blir
+  28/29 februari, och 29 februari + tolv månader blir 28 februari följande år.
+
+`service_due_status` beräknar båda återstående värdena och en central status.
+Datum jämförs som kalenderdagar mot `(now() at time zone 'Europe/Stockholm')::date`,
+inte som timmar delat med 24. Miltal jämförs med befintliga vehicles.current_mileage.
+Samma funktion används av båda vyerna; frontend formaterar bara resultatet.
+
+| Status | Regel |
+| --- | --- |
+| overdue / Försenad | Minst en känd gräns har passerats: dagar < 0 eller mil < 0. |
+| due_soon / Snart dags | Ingen känd gräns är passerad, men 0–30 dagar återstår eller 0–ceil(distance_interval × 0,10) mil återstår. |
+| unknown / Uppgifter saknas | Ingen känd gräns är försenad/snart, men någon konfigurerad gräns saknar utgångsvärde eller aktuellt miltal. Även helt okända gränser är unknown. |
+| ok / Kommande | Alla konfigurerade gränser kan bedömas och ligger längre bort. |
+
+För egna påminnelser utan körsträckeintervall används 500 mil som snart-gräns.
+Precis på förfallodagen eller förfallomiltalet visas Snart dags med Idag/Dags nu;
+Försenad används först när gränsen passerats. Med två gränser gäller den som nås
+först. En känd försenad/snart gräns väger därför tyngre än en okänd andra gräns,
+men en känd framtida gräns räcker inte för att kalla ett delvis okänt intervall ok.
+Detta är påminnelsetrösklar, inte tillverkarrekommendationer.
+
+Listor sorteras efter Försenad, Snart dags, Kommande, Uppgifter saknas; inom samma
+grupp sorteras känt datum först, därefter återstående mil, sedan id för stabil
+ordning. Kalenderdatum prioriteras framför poster med enbart körsträcka inom samma
+grupp; vi uppskattar inte när ett fordon kommer att nå ett visst miltal.
+
+### Spara, markera utfört och synka
+
+Alla mutationer verifierar requireVehicleAccess och anropar RPC genom användarens
+Supabase-session. RPC återanvänder lock_service_vehicle, auth.uid(), SECURITY DEFINER,
+tom search_path och samma låsordning för vehicle/ownership som servicehistoriken.
+RLS visar intervall endast för aktiva ägare. Påminnelser kräver dessutom user_id =
+auth.uid(). Tabellerna har bara SELECT för klienter; inga direkta INSERT/UPDATE/DELETE.
+Vyerna `service_interval_overview` och `reminder_overview` använder security_invoker,
+så underliggande RLS gäller även via vyerna.
+
+- `save_service_interval` skapar/redigerar och synkar påminnelsen i samma transaktion.
+  Appen skapar bara source=owner; modellen tillåter system/external_provider för senare
+  faser. Befintliga servicekategorier återanvänds, utan en konkurrerande kategorilista.
+- `complete_service_interval` uppdaterar last_completed_date/last_completed_mileage
+  och räknar om samma påminnelse. Formuläret föreslår dagens svenska datum och fordonets
+  kända miltal, men användaren kan ange historiska värden. Minst ett värde krävs.
+- Markera som utfört uppdaterar bara serviceplanens manuella baslinje. Det skapar ingen
+  servicehändelse/miltalspost och ändrar aldrig current_mileage. Ett historiskt lägre
+  värde sänker därför inte fordonets etablerade miltal. En framtida explicit koppling
+  till serviceevent kan läggas i detta flöde; ingen automatisk klassificering görs.
+- `sync_interval_reminder` är en privat helper. Unikt service_interval_id ger högst en
+  kopplad påminnelserad totalt. Upsert återanvänder raden i stället för att skapa nya.
+  Skapa, redigera och markera utfört återaktiverar påminnelsen även om den avfärdats.
+  Avfärdning betyder alltså dölj aktuell påminnelse, inte stoppa serviceintervallet.
+- Saknad baslinje ger en kopplad reminder med okänt förfallo. Egna reminders måste
+  alltid ha datum eller miltal. En sammansatt foreign key nekar olika fordon för
+  intervallet och dess reminder. Index täcker fordon, användare/status och intervall-id.
+- `deactivate_service_interval` sätter is_active=false och avfärdar den kopplade
+  påminnelsen atomiskt. Rader behålls. UI har separat bekräftelse och ingen permanent
+  borttagning eller återaktiveringsfunktion i denna fas.
+- `create_custom_reminder` sätter user_id från auth.uid(). `set_reminder_status` tillåter
+  completed/dismissed för egna aktiva påminnelser. Completed sätter completed_at.
+  Kopplade reminders får inte markeras completed genom denna RPC: UI leder till
+  intervallets Markera som utfört, så serviceplan och reminder inte motsäger varandra.
+
+Nuvarande miltal och brådskande status läses från databasen vid varje sidrendering.
+En servicehändelse med nytt miltal påverkar därför status via den befintliga
+miltalshistoriken, utan separat synkmodell. Servicehistorikens actions invaliderar
+även /reminders. Planmutationer invaliderar fordonsvyer, dashboard och påminnelser.
+
+### UI och avgränsningar
+
+- `/vehicles/[vehicleId]/service`: aktiva intervall, nästa förfallo, status och senaste
+  utförande. `?new=1`, `?edit=<id>` och `?complete=<id>` använder samma route.
+- `/reminders`: aktiva påminnelser med fordon, status och åtgärder. `?new=1` skapar en
+  egen reminder; utan fordon får användaren först lägga till ett.
+- Dashboard visar högst tre prioriterade reminders över användarens fordon.
+  Fordonssidan visar ett prioriterat intervall i Nästa service och länk till serviceplanen.
+  Sekundära sektioner har lokal laddning/felhantering och blockerar inte huvudinformationen.
+- Båda listorna har 30 poster per sida och databasbaserad sortering. Fordon och
+  status hämtas samlat i vyerna, utan separat anrop per intervall/påminnelse.
+- Namn/titel max 150 tecken, heltalsintervall i mil > 0 och månader 1–1200.
+  Senaste datum och egna påminnelsedatum ligger inom 1886–2100. Miltal är 0–2147483647;
+  även nästa förfallomiltal måste rymmas i PostgreSQL integer. Tomma valfria värden
+  blir null. Inga faktiska servicegränser förifylls som generella rekommendationer.
+- Inga e-post-/push-utskick, externa serviceanvisningar, schemalagda jobb eller
+  ändringar i auth, lookup eller dokumentflödet införs. Ingen global klientstate.
+
+### Verifiering och öppna frågor
+
+Tester kör alla sex migrationerna i PGlite och verifierar databas/RLS, A/B-isolering,
+avslutat ägarskap, constraints, oförändrad mileage history, atomisk rollback,
+synkning utan dubbletter samt centrala datum/miltal/statusgränser och skottår.
+Server-/formulärtester kontrollerar validering, identitet, rättigheter och revalidation.
+Webbläsartester använder verklig lokal PostgreSQL för RPC/vyer med Auth/PostgREST-
+testadapter och kontrollerar flödena vid 320, 390 och 1280 px.
+
+Före produktion återstår migrering och test med riktiga Supabase-sessioner/PostgREST,
+RLS genom vyerna, samtidig redigering/utförande och återkallat ägarskap mitt i mutation.
+Schema-genererade typer skapas först från verkligt migrerad Supabase. Ingen hostad
+databas har ändrats här. SQL-vyerna kräver PostgreSQL med security_invoker-stöd (15+).
+
+Avfärdade påminnelser och tidigare utföranden har ingen separat historikvy; den senaste
+manuella baslinjen ersätter den gamla i serviceplanen, medan riktiga servicehändelser
+bevaras i befintlig historik. Ett framtida transferflöde behöver besluta om mottagarens
+reminders: gamla ägarens åtkomst försvinner direkt, men ingen bakgrundsöverföring skapas.
+När en aktiv ny ägare uttryckligen sparar/utför intervallet synkas den enda kopplade
+remindern till den användaren. Egna reminders överförs aldrig av detta flöde.
+
 ## Referenser
 
 - [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client)
