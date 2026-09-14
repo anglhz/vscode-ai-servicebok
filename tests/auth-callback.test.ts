@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 vi.mock("server-only", () => ({}));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined, has: () => false, delete: vi.fn() }) }));
 const auth = vi.hoisted(() => ({ exchangeCodeForSession: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ auth }) }));
 import { GET } from "../app/auth/callback/route";

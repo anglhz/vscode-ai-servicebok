@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { getAppUrl } from "@/lib/auth/app-url";
+import { consumeTransferContinuation } from "@/lib/auth/transfer-continuation";
 import { loginSchema, signupSchema, type AuthState } from "@/lib/validation/auth";
 
 const unavailable = "Tjänsten är inte tillgänglig just nu. Försök igen om en stund.";
@@ -18,7 +19,7 @@ export async function login(_previous: AuthState, formData: FormData): Promise<A
     if (error) return { message: "Det gick inte att logga in. Kontrollera e-post, lösenord och att kontot är bekräftat." };
   } catch { return { message: unavailable }; }
   revalidatePath("/", "layout");
-  redirect("/dashboard");
+  redirect(await consumeTransferContinuation());
 }
 
 export async function signup(_previous: AuthState, formData: FormData): Promise<AuthState> {
@@ -37,7 +38,7 @@ export async function signup(_previous: AuthState, formData: FormData): Promise<
   } catch { return { message: unavailable }; }
   if (signedIn) {
     revalidatePath("/", "layout");
-    redirect("/dashboard");
+    redirect(await consumeTransferContinuation());
   }
   return { success: true, message: "Kontrollera din e-post för att bekräfta kontot. Har du redan ett konto kan du logga in." };
 }
