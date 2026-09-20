@@ -9,9 +9,10 @@ import { vehicleTypeLabels } from "@/lib/validation/vehicle";
 import { getVehicleForCurrentUser } from "@/services/vehicles";
 import { Suspense } from "react";
 import { NextService } from "@/components/service-plan/upcoming";
+import { OwnershipSection } from "@/components/vehicle-transfers/ownership-section";
 
 export const metadata: Metadata = { title: "Fordon" };
-export default async function VehiclePage({ params, searchParams }: { params: Promise<{ vehicleId: string }>; searchParams: Promise<{ page?: string }> }) {
+export default async function VehiclePage({ params, searchParams }: { params: Promise<{ vehicleId: string }>; searchParams: Promise<{ page?: string; transferred?: string }> }) {
   const { vehicleId } = await params;
   const requestedPage = Number((await searchParams).page ?? 1);
   const page = Number.isInteger(requestedPage) && requestedPage >= 1 && requestedPage <= 10000 ? requestedPage : 1;
@@ -19,6 +20,7 @@ export default async function VehiclePage({ params, searchParams }: { params: Pr
   return <>
     <Link href="/vehicles" className="mb-4 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4">Tillbaka till mina fordon</Link>
     <PageHeader title={`${vehicle.make} ${vehicle.model}`} />
+    {(await searchParams).transferred === "1" && <p role="status" className="mb-6 rounded-md border p-4 text-sm">Fordonet har lagts till på ditt konto.</p>}
     <dl className="mb-8 grid gap-4 sm:grid-cols-2">
       <div><dt className="mb-2 text-sm text-muted-foreground">Registreringsnummer</dt><dd><RegistrationNumber value={vehicle.registration_number} /></dd></div>
       <div><dt className="mb-2 text-sm text-muted-foreground">Årsmodell</dt><dd>{vehicle.model_year ?? "Ej angivet"}</dd></div>
@@ -28,6 +30,7 @@ export default async function VehiclePage({ params, searchParams }: { params: Pr
     </dl>
     <Link href={`/vehicles/${vehicle.id}/documents`} className="mb-6 inline-flex min-h-12 items-center text-primary underline underline-offset-4">Visa dokument</Link>
     <Suspense fallback={<p className="my-6 text-sm text-muted-foreground">Hämtar serviceplan…</p>}><NextService vehicleId={vehicle.id} /></Suspense>
+    <Suspense fallback={<p className="my-6 text-sm text-muted-foreground">Hämtar ägarskap…</p>}><OwnershipSection vehicleId={vehicle.id} /></Suspense>
     <ServiceTimeline vehicleId={vehicle.id} events={history.events} hasMore={history.hasMore} page={page} />
   </>;
 }
