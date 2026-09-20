@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["pdfkit"],
   logging: { incomingRequests: { ignore: [/^\/transfer\//] }, serverFunctions: false },
   async headers() {
     return [{ source: "/transfer/:path*", headers: [
