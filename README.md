@@ -856,6 +856,83 @@ Länken är en bearer capability: vem som har länken och ett inloggat konto kan
 acceptera. Ingen myndighetsverifiering, mottagarbindning, e-post/SMS, betalning,
 familjedelning eller claim discovery införs.
 
+## PDF-export av servicebok
+
+Fordonsprofilens **Exportera servicebok** hämtar en PDF via
+`POST /vehicles/[vehicleId]/export`. Knappen visar lokal laddning, bekräftelse och
+ett återförsökbart fel. Exporten använder PDFKit i Next.js Node-runtime, utan
+browserprocess, externa fontanrop eller service role. DejaVu Sans 2.37 Regular/Bold
+ligger som oförändrade TTF-assets i `assets/fonts/dejavu/`, med upstreamlicens och
+SHA-256. Licensen är Bitstream Vera med DejaVu-ändringar i public domain; hela
+licensfilens övriga glyphnotiser följer med. `outputFileTracingIncludes` tar med
+TTF-filerna och licensen i exportens serverpaket; PDFKit bäddar in använda glypher.
+Varken användarens systemfonts eller nedladdning vid runtime används.
+
+Applicera migration `20260920000800_vehicle_export.sql` efter tidigare migrationer.
+Den inför endast läsfunktionen `get_vehicle_export_data(uuid)`, med SECURITY
+INVOKER och exekveringsrätt för authenticated. Befintlig RLS gäller oförändrad.
+Fordon, händelser och aktiva intervall läses i en SQL-snapshot. JSON-aggregatet
+undviker PostgRESTs radgräns utan separata anrop per händelse. Servern kräver aktivt
+ägarskap både före läsningen och efter PDF-genereringen. Oinloggade får 401;
+andra exportfel får ett generiskt fel utan databasdetaljer eller fordonsdata.
+
+PDF innehåller registreringsnummer om det finns, märke/modell, årsmodell, typ,
+VIN, registrerat aktuellt miltal, genereringsdatum, sammanfattning och synliga
+servicehändelser äldst först. Händelser visar datum, kategori, titel, miltal,
+angiven kostnad, utförare, beskrivning, saklig källmarkering och dokumentindikator.
+Aktiva serviceintervall använder befintlig beräkning av nästa förfall och status.
+Antal händelser samt första/senaste datum gäller exporterad historik. Kostnaden
+summerar endast angivna belopp, inklusive noll, som heltalsöre med BigInt och
+formateras till SEK utan flyttalsavrundning. Saknad kostnad räknas inte som noll.
+
+Privata anteckningar, användar-/ägaruppgifter, interna ID:n, custom reminders,
+filnamn, storage paths, signerade URL:er och dokumentinnehåll exporteras inte.
+Dokumentindikatorn kontrollerar endast länkar som dokument-RLS låter aktuell ägare
+läsa: färdiga, ej raderade dokument med giltig åtkomst, inklusive uttryckligen
+överförda dokument. Inga originalfiler hämtas. Historiken påstås inte vara externt
+verifierad. Beskrivningar och utförarnamn är registrerad fritext och inkluderas
+som sådana; användaren behöver granska innehållet före vidare delning.
+
+PDF använder A4, automatisk radbrytning/sidbrytning och sidnummer med totalt antal
+sidor. Historik och beskrivningar trunkeras inte. Unicode-text och typografiska
+tecken bevaras, inklusive svenska, polska, arabiska och kyrilliska. Arabisk text
+formas av Fontkit och bidi-js ordnar textsegmentens läsriktning per rad, med
+bibehållen styckeriktning. Endast kontroll-/bidi-styrtecken saneras; ZWJ/ZWNJ
+bevaras. 😀 stöds i svartvitt. Fonten täcker inte varje skriftsystem eller emoji:
+tecken utan glyph stoppar exporten med befintligt generiskt fel, utan att någon
+ofullständig PDF lämnas ut. Ingen giltig språktext ersätts tyst med `?`.
+Filnamnet består endast av säkra
+ASCII-tecken och faller tillbaka på `servicebok_fordon_<år>.pdf` när regnummer saknas.
+Svaret har `Content-Type: application/pdf`, `Content-Disposition: attachment`,
+`Cache-Control: private, no-store`, CDN-/Vercel-CDN-Cache-Control `no-store` och
+`X-Content-Type-Options: nosniff`. Ingen exporterad PDF sparas på servern.
+
+Exporttester finns i `tests/vehicle-export.test.ts`, `tests/vehicle-export-rls.test.ts`
+`tests/vehicle-export-unicode.test.ts` och `tests/vehicle-export-visual.test.ts`.
+De täcker datamodell, exakt kostnad,
+åtkomst/RLS, ägarbyte, dokumenturval/radering, fler än 1 000 poster, headers,
+felhantering, Unicode-glypher/inbäddning och fem PDF-scenarier. Sätt `SERVICEBOK_PDF_QA_DIR` till en lokal
+testkatalog när visuella test-PDF:er ska sparas; annars skapas inga filer.
+Efter Unicode-korrigeringen passerade 319 tester (41 nya för export, varav åtta
+tillkom i Unicode-korrigeringen). Typecheck, lint och build passerade. Hela sviten kördes med
+`npm test -- --maxWorkers=2` efter att standardkörningen fastnat lokalt. De fyra
+ursprungliga PDF-exemplens 23 sidor och Unicode-exemplets två sidor granskades visuellt, och fullständiga långa beskrivningar
+kontrollerades med textextraktion. Produktionsbyggets nedladdning samt knappens
+laddnings-/feltillstånd verifierades i browser vid 320, 390 och 1280 px, med lokal
+Auth/PostgREST-testadapter och riktiga PostgreSQL/RLS-operationer.
+Unicode-kontrollen verifierar `Müller Łódź`, `محمد`, `Сервис` och `😀` i make,
+model, title, provider_name, description och interval name, inklusive PDF:ens
+ToUnicode-mappning och FontFile2-inbäddning. Produktionsbyggets route trace
+innehåller båda TTF-filerna och licensen. PDF-nedladdning från produktionsbygget
+passerade även med externa HTTP/fetch-anrop blockerade i den lokala testkörningen.
+
+Före release: applicera migrationen i hostad Supabase och verifiera export med
+riktiga ägarsessioner, Vercel-preview/produktion och stora verkliga historiker.
+PDF och SQL-snapshot hålls i minnet; plattformens minnes-, svarsstorleks- och
+tidsgränser gäller även om appen inte trunkerar historiken. Route anger 60 sekunders
+maxDuration. Ingen bakgrundskö, permanent exportlagring eller alternativ exportväg
+införs. Kontrollera därför gränserna för den aktuella hostingplanen.
+
 ## Referenser
 
 - [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client)

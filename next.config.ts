@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["pdfkit"],
+  outputFileTracingIncludes: { "/vehicles/*/export": ["./assets/fonts/dejavu/*.ttf", "./assets/fonts/dejavu/LICENSE"] },
   logging: { incomingRequests: { ignore: [/^\/transfer\//] }, serverFunctions: false },
   async headers() {
     return [{ source: "/transfer/:path*", headers: [
