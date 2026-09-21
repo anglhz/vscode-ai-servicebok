@@ -861,8 +861,12 @@ familjedelning eller claim discovery införs.
 Fordonsprofilens **Exportera servicebok** hämtar en PDF via
 `POST /vehicles/[vehicleId]/export`. Knappen visar lokal laddning, bekräftelse och
 ett återförsökbart fel. Exporten använder PDFKit i Next.js Node-runtime, utan
-browserprocess, externa fontanrop eller service role. `serverExternalPackages`
-behåller PDFKits inbyggda fontfiler tillgängliga även i produktionsbygget.
+browserprocess, externa fontanrop eller service role. DejaVu Sans 2.37 Regular/Bold
+ligger som oförändrade TTF-assets i `assets/fonts/dejavu/`, med upstreamlicens och
+SHA-256. Licensen är Bitstream Vera med DejaVu-ändringar i public domain; hela
+licensfilens övriga glyphnotiser följer med. `outputFileTracingIncludes` tar med
+TTF-filerna och licensen i exportens serverpaket; PDFKit bäddar in använda glypher.
+Varken användarens systemfonts eller nedladdning vid runtime används.
 
 Applicera migration `20260920000800_vehicle_export.sql` efter tidigare migrationer.
 Den inför endast läsfunktionen `get_vehicle_export_data(uuid)`, med SECURITY
@@ -890,25 +894,37 @@ verifierad. Beskrivningar och utförarnamn är registrerad fritext och inkludera
 som sådana; användaren behöver granska innehållet före vidare delning.
 
 PDF använder A4, automatisk radbrytning/sidbrytning och sidnummer med totalt antal
-sidor. Historik och beskrivningar trunkeras inte. Inbyggd Helvetica stödjer svenska
-tecken; typografisk interpunktion normaliseras och andra tecken utanför Latin-1
-ersätts med `?`, med en förklarande notis i PDF. Filnamnet består endast av säkra
+sidor. Historik och beskrivningar trunkeras inte. Unicode-text och typografiska
+tecken bevaras, inklusive svenska, polska, arabiska och kyrilliska. Arabisk text
+formas av Fontkit och bidi-js ordnar textsegmentens läsriktning per rad, med
+bibehållen styckeriktning. Endast kontroll-/bidi-styrtecken saneras; ZWJ/ZWNJ
+bevaras. 😀 stöds i svartvitt. Fonten täcker inte varje skriftsystem eller emoji:
+tecken utan glyph stoppar exporten med befintligt generiskt fel, utan att någon
+ofullständig PDF lämnas ut. Ingen giltig språktext ersätts tyst med `?`.
+Filnamnet består endast av säkra
 ASCII-tecken och faller tillbaka på `servicebok_fordon_<år>.pdf` när regnummer saknas.
 Svaret har `Content-Type: application/pdf`, `Content-Disposition: attachment`,
 `Cache-Control: private, no-store`, CDN-/Vercel-CDN-Cache-Control `no-store` och
 `X-Content-Type-Options: nosniff`. Ingen exporterad PDF sparas på servern.
 
 Exporttester finns i `tests/vehicle-export.test.ts`, `tests/vehicle-export-rls.test.ts`
-och `tests/vehicle-export-visual.test.ts`. De täcker datamodell, exakt kostnad,
+`tests/vehicle-export-unicode.test.ts` och `tests/vehicle-export-visual.test.ts`.
+De täcker datamodell, exakt kostnad,
 åtkomst/RLS, ägarbyte, dokumenturval/radering, fler än 1 000 poster, headers,
-felhantering och fyra PDF-scenarier. Sätt `SERVICEBOK_PDF_QA_DIR` till en lokal
+felhantering, Unicode-glypher/inbäddning och fem PDF-scenarier. Sätt `SERVICEBOK_PDF_QA_DIR` till en lokal
 testkatalog när visuella test-PDF:er ska sparas; annars skapas inga filer.
-Vid implementationen passerade 311 tester (33 nya). Hela sviten kördes med
+Efter Unicode-korrigeringen passerade 319 tester (41 nya för export, varav åtta
+tillkom i Unicode-korrigeringen). Typecheck, lint och build passerade. Hela sviten kördes med
 `npm test -- --maxWorkers=2` efter att standardkörningen fastnat lokalt. De fyra
-PDF-exemplens 23 sidor granskades visuellt, och fullständiga långa beskrivningar
+ursprungliga PDF-exemplens 23 sidor och Unicode-exemplets två sidor granskades visuellt, och fullständiga långa beskrivningar
 kontrollerades med textextraktion. Produktionsbyggets nedladdning samt knappens
 laddnings-/feltillstånd verifierades i browser vid 320, 390 och 1280 px, med lokal
 Auth/PostgREST-testadapter och riktiga PostgreSQL/RLS-operationer.
+Unicode-kontrollen verifierar `Müller Łódź`, `محمد`, `Сервис` och `😀` i make,
+model, title, provider_name, description och interval name, inklusive PDF:ens
+ToUnicode-mappning och FontFile2-inbäddning. Produktionsbyggets route trace
+innehåller båda TTF-filerna och licensen. PDF-nedladdning från produktionsbygget
+passerade även med externa HTTP/fetch-anrop blockerade i den lokala testkörningen.
 
 Före release: applicera migrationen i hostad Supabase och verifiera export med
 riktiga ägarsessioner, Vercel-preview/produktion och stora verkliga historiker.

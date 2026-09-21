@@ -47,8 +47,8 @@ describe("minimal export model and presentation",()=>{
   it("keeps document booleans and service intervals without full document or reminder objects",()=>{
     const model=createVehicleExportModel(input);expect(model.events[0].has_document).toBe(true);expect(model.intervals).toEqual(input.intervals);
   });
-  it("normalizes punctuation and visibly substitutes unsupported characters",()=>{
-    expect(pdfText("Åäö – ‘test’… 😀")).toBe("Åäö - 'test'... ?");
+  it("preserves Swedish text, typography and emoji",()=>{
+    expect(pdfText("Åäö – ‘test’… 😀")).toBe("Åäö – ‘test’… 😀");
   });
   it("renders valid multipage A4 PDF with full long description and no per-event truncation",async()=>{
     const model=createVehicleExportModel({...input,events:Array.from({length:70},(_,n)=>({...event,title:`Service ${n}`,description:n===0?"Lång beskrivning ".repeat(250):event.description}))});

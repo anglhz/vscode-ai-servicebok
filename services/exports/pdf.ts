@@ -1,15 +1,9 @@
 import "server-only";
 import PDFDocument from "pdfkit";
+import { exportFont, assertGlyphCoverage, pdfText } from "./fonts";
+import { drawBidiText } from "./bidi";
+export { pdfText } from "./fonts";
 import { exportLabels, formatExportCost, formatExportDate, formatMileage, type VehicleExportData } from "./model";
-
-// Core PDF fonts cover Swedish/Latin-1 without system fonts or runtime downloads.
-// Normalize typographic punctuation; unsupported characters are visibly replaced, never encoded as corrupt glyphs.
-export function pdfText(value: string) {
-  return value.normalize("NFC").replace(/[\u2010-\u2015\u2212]/g,"-").replace(/[\u2018\u2019]/g,"'")
-    .replace(/[\u201c\u201d]/g,'"').replace(/\u2026/g,"...").replace(/\u2022/g,"-")
-    .replace(/[\u00a0\u202f\t]/g," ").replace(/\r\n?/g,"\n").replace(/\u20ac/g,"EUR")
-    .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g,"").replace(/[^\x20-\x7e\u00a1-\u00ff\n]/gu,"?");
-}
 
 export async function generateVehiclePdf(data: VehicleExportData): Promise<Buffer> {
   const document = new PDFDocument({ size:"A4", margins:{top:58,right:48,bottom:58,left:48}, bufferPages:true,
@@ -21,13 +15,17 @@ export async function generateVehiclePdf(data: VehicleExportData): Promise<Buffe
   const left=48, width=499.28, bottom=783.89, ink="#19252e", muted="#58636e", accent="#245b51";
   const ensure = (height:number) => { if(document.y + height > bottom) document.addPage(); };
   const text = (value:string,size=10,color=ink,bold=false) => {
-    document.font(bold?"Helvetica-Bold":"Helvetica").fontSize(size).fillColor(color);
-    document.text(pdfText(value),left,document.y,{width,lineGap:3});
+    const clean=pdfText(value);assertGlyphCoverage(clean,bold);
+    document.font(bold?"Export-Bold":"Export-Regular").fontSize(size).fillColor(color);
+    if(/[\p{Script=Arabic}\p{Script=Hebrew}]/u.test(clean))drawBidiText(document,clean,left,width,bottom);
+    else document.text(clean,left,document.y,{width,lineGap:3});
   };
   const rule = () => { ensure(18); document.moveTo(left,document.y+6).lineTo(left+width,document.y+6).strokeColor("#dce2e5").lineWidth(0.5).stroke();document.y+=20; };
   const section = (title:string) => { ensure(85);text(title,16,accent,true);document.y+=10; };
   const field = (label:string,value:string) => { text(`${label}: ${value}`);document.y+=3; };
   try {
+    document.registerFont("Export-Regular",exportFont().bytes);
+    document.registerFont("Export-Bold",exportFont(true).bytes);
     text("SERVICEBOK",10,accent,true);document.y+=12;
     text("Fordonets servicehistorik",25,ink,true);document.y+=8;
     text(`Genererad ${formatExportDate(data.generated_at)}`,9,muted);rule();
@@ -65,12 +63,9 @@ export async function generateVehiclePdf(data: VehicleExportData): Promise<Buffe
       const due=[interval.due_mileage === null ? null : `Nästa vid ${formatMileage(interval.due_mileage)}`,interval.due_date ? `senast ${formatExportDate(interval.due_date)}` : null].filter(Boolean);
       text(due.length ? due.join(" eller ") : "Utgångsvärden saknas.");rule();
     }
-    if(JSON.stringify(data).match(/[^\x00-\xff\u2010-\u2015\u2018-\u201d\u2026\u2022\u202f\u20ac\u2212]/u)) {
-      ensure(40);text("Tecken utanför rapportens latinska teckenuppsättning återges med frågetecken.",8,muted);
-    }
     const range=document.bufferedPageRange();
     for(let index=0;index<range.count;index++) {
-      document.switchToPage(index);document.font("Helvetica").fontSize(8).fillColor(muted);
+      document.switchToPage(index);document.font("Export-Regular").fontSize(8).fillColor(muted);
       if(index>0) document.text("SERVICEBOK | Fordonshistorik",left,30,{lineBreak:false});
       document.text(pdfText(`Genererad ${formatExportDate(data.generated_at)}`),left,810,{lineBreak:false});
       document.text(`Sida ${index+1} / ${range.count}`,left+width-70,810,{lineBreak:false});
