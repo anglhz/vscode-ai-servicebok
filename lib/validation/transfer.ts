@@ -8,4 +8,4 @@ export const transferPreviewSchema = z.object({
   status: transferStatusSchema, make: z.string().nullable(), model: z.string().nullable(),
   registration_number: z.string().nullable(), expires_at: z.string(), document_count: z.number().int().nonnegative(), is_sender: z.boolean(),
 });
-export type TransferState = { message?: string; url?: string; expiresAt?: string; cancelled?: boolean };
+export type TransferState = { message?: string; url?: string; expiresAt?: string; cancelled?: boolean; premiumRequired?: boolean };

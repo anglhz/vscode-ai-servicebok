@@ -1,14 +1,17 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function ExportButton({ vehicleId }: { vehicleId:string }) {
   const [pending,setPending]=useState(false),[message,setMessage]=useState("");
+  const [premiumRequired,setPremiumRequired]=useState(false);
   async function download() {
-    setPending(true);setMessage("");
+    setPending(true);setMessage("");setPremiumRequired(false);
     try {
       const response=await fetch(`/vehicles/${encodeURIComponent(vehicleId)}/export`,{method:"POST",cache:"no-store"});
+      if(response.status===403) {setMessage("PDF-export kräver Premium.");setPremiumRequired(true);return;}
       if(!response.ok || !response.headers.get("Content-Type")?.startsWith("application/pdf")) throw new Error("export failed");
       const blob=await response.blob(),url=URL.createObjectURL(blob);
       const filename=response.headers.get("Content-Disposition")?.match(/filename="(servicebok_[A-Za-z0-9_]+\.pdf)"/)?.[1] ?? "servicebok_fordon.pdf";
@@ -19,5 +22,6 @@ export function ExportButton({ vehicleId }: { vehicleId:string }) {
     finally {setPending(false);}
   }
   return <div className="mb-6 space-y-2"><Button type="button" variant="outline" disabled={pending} aria-busy={pending} onClick={download} className="min-h-12"><Download aria-hidden className="size-4" />{pending ? "Skapar PDF…" : "Exportera servicebok"}</Button>
-    {message && <p role="status" className="text-sm">{message}</p>}</div>;
+    {message && <p role="status" className="text-sm">{message}</p>}
+    {premiumRequired && <Link href="/account" className="inline-flex min-h-12 items-center text-sm underline">Se Premium och uppgradera</Link>}</div>;
 }

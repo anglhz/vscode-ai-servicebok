@@ -45,6 +45,7 @@ export function VehicleForm({ registration = "", lookup }: { registration?: stri
       {state.errors?.[name] && <p id={`${name}-error`} role="alert" className="text-sm text-destructive">{state.errors[name]?.[0]}</p>}
     </div>)}
     {state.message && <p role="alert" className="text-sm text-destructive">{state.message}</p>}
+    {state.premiumRequired && <Link href="/account" className="inline-flex min-h-12 items-center text-sm underline">Se Premium och uppgradera</Link>}
     <div className="flex flex-col gap-3 pt-2 sm:flex-row-reverse">
       <Button type="submit" disabled={pending} aria-busy={pending} className="min-h-12 flex-1">{pending ? "Sparar…" : lookup ? "Lägg till fordon" : "Spara fordon"}</Button>
       <Button variant="outline" asChild className="min-h-12 flex-1"><Link href="/vehicles">Avbryt</Link></Button>

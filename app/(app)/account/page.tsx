@@ -3,10 +3,11 @@ import { PageHeader } from "@/components/layout/page-header";
 import { requireUser } from "@/lib/auth/session";
 import { getOwnProfile } from "@/services/profiles/get-profile";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { BillingSummary } from "@/components/subscriptions/billing-summary";
 
 export const metadata: Metadata = { title: "Konto" };
 
-export default async function AccountPage() {
+export default async function AccountPage({ searchParams }: { searchParams: Promise<{ checkout?: string }> }) {
   const user = await requireUser();
   const { profile, unavailable } = await getOwnProfile();
   return <>
@@ -19,5 +20,6 @@ export default async function AccountPage() {
       {unavailable && <p role="status" className="text-sm text-muted-foreground">Profiluppgifterna kunde inte hämtas just nu.</p>}
       <LogoutButton />
     </section>
+    <BillingSummary checkout={(await searchParams).checkout} />
   </>;
 }

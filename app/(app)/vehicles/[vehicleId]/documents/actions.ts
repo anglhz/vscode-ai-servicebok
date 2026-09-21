@@ -1,5 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { PlanLimitError } from "@/lib/permissions/plan-limit";
 import { createDocument, finalizeDocument, softDeleteDocument, createDocumentDownloadUrl } from "@/services/documents";
 import { documentUploadSchema, type DocumentActionResult } from "@/lib/validation/document";
 
@@ -8,7 +9,10 @@ export async function prepareUpload(vehicleId: string, eventId: string | null, i
   const parsed = documentUploadSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0].message };
   try { return { upload: await createDocument(vehicleId, eventId, input) }; }
-  catch { return { error: "Dokumentet kunde inte förberedas. Försök igen." }; }
+  catch (error) {
+    if (error instanceof PlanLimitError) return { error: error.message, premiumRequired: true };
+    return { error: "Dokumentet kunde inte förberedas. Försök igen." };
+  }
 }
 export async function confirmUpload(vehicleId: string, id: string): Promise<DocumentActionResult> {
   try { await finalizeDocument(vehicleId, id); }

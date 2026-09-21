@@ -1,4 +1,5 @@
 import "server-only";
+import { checkPlanLimit } from "@/lib/permissions/plan-limit";
 import { notFound } from "next/navigation";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth/session";
@@ -48,6 +49,7 @@ export async function createVehicle(input: unknown, receipt?: string) {
     ...(lookup ? { p_lookup_receipt: receipt } : {}),
   });
   if (error?.code === "23505") throw new DuplicateVehicleError();
+  checkPlanLimit(error);
   if (lookup && error?.code === "22023") throw new InvalidVehicleLookupError();
   if (error) throw new Error("Fordonet kunde inte sparas.");
   return z.uuid().parse(data);

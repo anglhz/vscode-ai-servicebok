@@ -1277,3 +1277,26 @@ RLS skyddar data även om klienten manipuleras.
 Premiumstatus kan valideras serverside.
 
 Datamodellen kräver inte omskrivning för att stödja framtida ägarbyte.
+
+## Implementerad Billing V1
+
+Migration `20260921000900_subscriptions.sql` implementerar subscriptions enligt
+avsnitt 16, med explicit statusconstraint, unika user/customer/subscription-ID:n,
+periodslut, planerad uppsägning och tidsstämplar för Stripe subscription/event.
+RLS tillåter endast användarens egen SELECT. Privilegierade billing-RPC:er är
+endast körbara av service_role och skriver aldrig kortdata.
+
+`stripe_webhook_events` innehåller endast event-ID, typ och processed_at.
+`billing_operations` innehåller en kortlivad lease med fencing-token samt stabila
+Customer/Checkout-idempotency keys och sparade Checkout-parametrar. Båda tabellerna
+saknar klientåtkomst. `apply_stripe_subscription` uppdaterar abonnemang och markerar
+eventet i samma transaktion. `get_billing_overview` lämnar sessionsbundna plan- och
+kvotuppgifter; `is_premium_user` och `plan_limits` är interna centrala regler.
+
+Dokument får `quota_user_id`, backfylld från uppladdare eller uttrycklig aktuell
+transfermottagare. Ett partiellt index över ej raderade dokument stödjer kvotsumman.
+Pending/ready räknas, soft-deleted räknas inte. Fordons- och dokumenttriggers tar
+kontolås och stoppar överskridande reservationer atomiskt. Transfer flyttar bara
+utvalda färdiga dokuments kvotkonto och återställs helt om mottagarens gräns överskrids.
+Nedgradering ändrar inte befintliga data. Gränser, retentionavvägningar, statusmodell
+och test-/driftsinstruktioner finns i README:s Billing-avsnitt.

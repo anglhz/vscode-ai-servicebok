@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only",()=>({}));
 const mocks=vi.hoisted(()=>({access:vi.fn(),rpc:vi.fn(),user:vi.fn()}));
+const premium = vi.hoisted(() => vi.fn());
+vi.mock("@/services/subscriptions", () => ({requirePremiumUser:premium,PremiumRequiredError:class extends Error {}}));
+import { PremiumRequiredError } from "@/services/subscriptions";
 vi.mock("@/lib/permissions/vehicle",()=>({requireVehicleAccess:mocks.access}));
 vi.mock("@/lib/auth/session",()=>({getCurrentUser:mocks.user}));
 import { createVehicleExportModel, exportFilename, exportLabels, formatExportCost, formatExportDate, formatMileage } from "@/services/exports/model";
@@ -60,6 +63,11 @@ describe("minimal export model and presentation",()=>{
 });
 
 describe("scoped export service and download route",()=>{
+  it("Free cannot directly export PDF, before any vehicle data is queried",async()=>{
+    premium.mockRejectedValue(new PremiumRequiredError());
+    const response=await POST(new Request("http://localhost/export",{method:"POST"}),{params:Promise.resolve({vehicleId:id})});
+    expect(response.status).toBe(403);expect((await response.json()).premiumRequired).toBe(true);expect(mocks.rpc).not.toHaveBeenCalled();
+  });
   it("uses one user-scoped RPC instead of per-event or browser queries",async()=>{
     expect((await getVehicleExportData(id)).summary.eventCount).toBe(1);
     expect(mocks.access).toHaveBeenCalledWith(id);expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("get_vehicle_export_data",{p_vehicle_id:id});

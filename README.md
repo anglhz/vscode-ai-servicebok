@@ -933,7 +933,168 @@ tidsgränser gäller även om appen inte trunkerar historiken. Route anger 60 se
 maxDuration. Ingen bakgrundskö, permanent exportlagring eller alternativ exportväg
 införs. Kontrollera därför gränserna för den aktuella hostingplanen.
 
+## Free/Premium och Stripe Billing (V1)
+
+Migration `20260921000900_subscriptions.sql` läggs efter PDF-migrationen. Applicera
+alla migrationer i ordning före driftsättning av denna kod. Befintliga konton utan
+subscription-rad räknas som Free. Inga befintliga fordon eller dokument tas bort.
+
+Officiella Stripe Node SDK **22.6.2**, API-version **2026-08-26.dahlia**, används
+enbart serverside via `lib/stripe/server.ts`. Hosted Checkout kräver ingen
+publishable key eller Stripe-kod i browsern. Inga Product/Price skapas automatiskt.
+
+### Konfiguration och lokal testning
+
+1. Skapa manuellt en Product och en återkommande **månatlig** Price i Stripe
+   testläge. Välj belopp/valuta där; appen hårdkodar inget belopp. Konfigurera
+   Customer Portal för betalmetod, fakturor och uppsägning. Tillåt inte byte till
+   orelaterade produkter eller antal platser i portalen.
+2. Ange `STRIPE_SECRET_KEY`, `STRIPE_PREMIUM_PRICE_ID` och
+   `SUPABASE_SERVICE_ROLE_KEY` på servern. Behåll `NEXT_PUBLIC_SUPABASE_URL` och
+   `NEXT_PUBLIC_SUPABASE_ANON_KEY`. `APP_URL` är miljöns fasta bas-URL, exempelvis
+   `http://localhost:3000`; aldrig en request Host header eller formulärparameter.
+3. Starta appen och kör `stripe login`, därefter:
+
+   ```sh
+   stripe listen --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.paid,invoice.payment_failed --forward-to localhost:3000/api/stripe/webhook
+   ```
+
+   Sätt det **egna** listener-secretet i `STRIPE_WEBHOOK_SECRET` och starta om appen.
+   Lokalt listener-secret och hostad endpoints secret är olika.
+4. Logga in med ett riktigt testkonto, välj Uppgradera på `/account` och genomför
+   hosted Checkout med Stripes testbetalningsmetod. Kontrollera plan via webhook,
+   portal/uppsägning, dubbla klick och återleverans med Stripe CLI/Dashboard.
+   `stripe trigger` med en slumpmässigt genererad Customer aktiverar inte ett
+   Servicebok-konto: en lokal customer-koppling måste redan finnas.
+5. Preview ska ha explicit HTTPS `APP_URL`, testnycklar, egen webhookendpoint och
+   helst separat Supabase/Stripe-testmiljö. Produktion ska ha sina egna serverkeys,
+   Price och endpoint `https://<egen-domän>/api/stripe/webhook`. Registrera de sex
+   eventtyperna ovan med kompatibel API-version. Kör aldrig utvecklingstester mot
+   livebetalningar. Auth Site URL/Redirect URLs konfigureras separat enligt
+   autentiseringsavsnittet; billing kräver inga wildcard-returadresser.
+
+### Checkout, portal och lokal status
+
+`services/subscriptions/checkout.ts` kräver verifierad session innan privilegierad
+åtkomst. Samma Stripe Customer återanvänds. Ny Customer får intern user-ID som
+metadata; e-post används inte som identitet och skickas inte i denna V1.
+Customer-ID sparas lokalt före Checkout. Pris, antal (1), subscription-mode och
+success/cancel/portal-return kommer enbart från serverkod. Retur sker till
+`/account?checkout=success`, `/account?checkout=cancelled` respektive `/account`.
+Success-parametern visar bara ett meddelande och kan aldrig ändra planen.
+
+En databaslease per konto serialiserar billing över flera serverinstanser.
+Customer-nyckeln är beständig; varje Checkout-försök har en sparad idempotency key,
+serverkonfiguration och en timmes sessionstid. En öppen session återanvänds.
+Förlorade svar återhämtas med samma nyckel/parametrar. Ett fullbordat Checkout med
+väntande subscription återgår till kontosidan. Befintlig icke-terminal Stripe
+subscription, inklusive försenad/incomplete, går till portalen i stället för att
+skapa en ny. Avslutade subscriptions tillåter ett nytt försök.
+
+Stripes nycklar kan gallras efter 24 timmar. En osäker Customer-skapning äldre än
+23 timmar blockeras för manuell avstämning i stället för att riskera dubblering.
+Kontrollera då Customer metadata i Stripe och den lokala raden genom betrodd
+administration innan nästa försök. Även fler än 100 historiska subscriptions eller
+sessions i en återhämtningssituation kräver avstämning. Inga råa Stripe-fel visas.
+
+### Webhook och behörighet
+
+`POST /api/stripe/webhook` kör i Node runtime, verifierar `Stripe-Signature` mot
+oförändrad raw body och behandlar de sex registrerade eventtyperna. Invoice- och
+Checkout-event används endast för att hitta subscription. Aktuell subscription
+hämtas från Stripe **efter** att kontots lease erhållits. Lokal Customer-relation
+måste matcha; metadata ensam auktoriserar aldrig. Orelaterade kunder ignoreras.
+Felaktig signatur ger 400, tillfälligt behandlingsfel 500 för Stripes återförsök.
+Rå eventbody eller betaluppgifter sparas/loggas inte.
+
+`apply_stripe_subscription` skriver subscription och event-ID/typ/processed_at i
+samma SQL-transaktion. Dubbletter ändrar inte state. Försenade event för samma
+subscription hämtar dagens Stripe-status i stället för att återspela payloaden.
+Eventtid sparas för spårbarhet. En äldre ersatt subscription får inte tränga undan
+en nyare; vid exakt samma skapandesekund behålls den redan lagrade subscriptionen.
+Leasen gäller två minuter och kontrolleras igen vid mutation så en försenad worker
+inte kan skriva efter att en ny tagit över. Stripe-anrop har begränsad timeout/retry.
+
+Service role används endast i `services/subscriptions/backend.ts`, via den
+`server-only`-markerade fabriken `lib/supabase/admin.ts`. Det är det uttryckligt
+privilegierade lagret för billinglease, Customer-koppling, webhookuppslag och
+atomisk synkning. Vanliga produktservices fortsätter använda användarsession/RLS.
+`subscriptions` har endast own-SELECT för användare; INSERT/UPDATE/DELETE och
+backend-RPC:er är spärrade. Eventtabell och lease-tabell är helt privata.
+
+### Entitlement och gränser
+
+Den centrala SQL-regeln `is_premium_user` kräver konfigurerat månadspris, exakt en
+subscription item med antal 1, lokal plan Premium, `active` eller `trialing` och
+`current_period_end > now()`. Pris-matchning sker vid webhookens synkning.
+`past_due` ger **omedelbart Free** i denna enkla V1. `canceled`, `unpaid`,
+`incomplete`, `incomplete_expired`, `paused` och `inactive` ger också Free.
+Okända framtida Stripe-statusar mappas till inactive. Planerad uppsägning behåller
+Premium fram till periodslutet när status fortfarande kvalificerar.
+Ändrat Price-ID i environment kräver omsynkning av befintliga subscriptions.
+
+`get_billing_overview`, `getUserPlan` och `requirePremiumUser` är gemensamma
+ingångar; produktfeatures tolkar aldrig Stripe-objekt själva.
+
+| Gräns | Free | Premium |
+| --- | --- | --- |
+| Aktiva ägda fordon | 1 | Obegränsat |
+| Dokumentmetadata som reserverar bytes | 50 MiB | 1 GiB |
+| PDF-export | Nekas serverside (403) | Tillåts med befintlig ägarkontroll |
+
+Konstanterna finns enbart i SQL-funktionen `plan_limits`; UI får dem genom overview.
+Den befintliga filgränsen 15 MiB och tillåtna filtyper ändras inte. Pending och ready
+dokument som inte är soft-deleted räknas. Soft-deleted räknas inte; fysisk Storage
+cleanup kan släpa efter och den logiska kvotan är därför inte ett exakt mått på
+leverantörens fakturerade lagring. Övergivna reservationer räknas tills befintlig
+cleanup hanterar dem. Nuvarande tre timmars cleanup-livscykel behålls.
+
+Databastriggers tar kontolås före ny ägarrelation eller dokumentreservation.
+Det skyddar även direkta RPC-anrop och samtidiga anrop över olika fordon.
+Avslutade ownerships räknas inte. En Free-mottagare med ett fordon nekas atomiskt
+vid transfer; ägarskap/överföring blir inte halvfärdiga. Uttryckligen utvalda,
+färdiga dokument flyttar sin kvotbelastning till mottagaren. Om dennes utrymme
+inte räcker återställs hela transfertransaktionen. Ej överförda privata dokument
+ligger kvar på tidigare kvotkonto och får ingen ny åtkomst. Retention/cleanup av
+sådana otillgängliga filer kräver ett separat administrativt livscykelflöde.
+
+Downgrade raderar ingenting och ändrar inte tidigare ägares åtkomstregler.
+Befintlig historik och tillgängliga dokument går fortsatt att läsa; nya fordon/
+reservationer nekas över aktuell gräns. Kontosidan visar plan, status, periodslut,
+planerad uppsägning, utrymme och diskreta billingknappar. Nekade funktioner visar
+ett lokalt meddelande med länk till konto, utan helsidesspinner.
+
+### Verifiering och kvarvarande driftskontroller
+
+`tests/billing.test.ts` använder mockad Stripe API och riktiga SDK-signaturer.
+`tests/subscriptions-rls.test.ts` kör alla migrationer i PostgreSQL/PGlite och
+kontrollerar RLS, entitlement, idempotency, lease, quota, transfer och downgrade.
+PDF-testet verifierar också direkt Free-anrop. Befintliga transferfixtures har
+Premium så deras tidigare säkerhetstester fortsätter gälla oberoende av ny gräns.
+`tests/vehicle-transfer-concurrency.mjs` kör dessutom riktiga överlappande
+transaktioner i isolerad lokal PostgreSQL (se tidigare instruktion för pg-modul).
+
+Kör `npm test`, `npm run typecheck`, `npm run lint`, `npm run build` före merge.
+Verifierat i denna ändring: **376 tester** i 29 filer (57 fler än föregående
+version), samt **7 separata native PostgreSQL-samtidighetstester** (4 nya).
+Typecheck, lint och produktionsbygge passerar. Hela Vitest-sviten kördes med
+`npm test -- --maxWorkers=2`. Produktionsbyggets Free/Premium-konto, väntestatus,
+generiskt Checkout-fel, Free PDF-spärr och Premium PDF-nedladdning kontrollerades
+vid 320, 390 och 1280 px med lokal Auth/PostgREST-fixture och riktiga SQL/RLS-regler.
+Ingen horisontell overflow eller JavaScript-krasch upptäcktes.
+
+Lokala Stripe credentials och Stripe CLI saknas i denna arbetsmiljö; riktiga
+hosted Checkout/Portal-betalningar och webhookleverans måste därför verifieras
+i Stripe testläge samt hostad Supabase/Vercel före release. Kontrollera även
+förnyelse, misslyckad betalning, uppsägning och återleverans. Förnyelser som inte
+synkas i tid tappar Premium vid lokalt periodslut (fail closed). Övervaka misslyckade
+webhooks; denna V1 har ingen separat schemalagd reconciliation-worker.
+
 ## Referenser
+
+- [Stripe webhooks och leveransordning](https://docs.stripe.com/webhooks)
+- [Stripe idempotency keys](https://docs.stripe.com/api/idempotent_requests)
+- [Stripe hosted Checkout](https://docs.stripe.com/api/checkout/sessions/create)
 
 - [Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client)
 - [PostgreSQL pgcrypto och HMAC](https://www.postgresql.org/docs/18/pgcrypto.html)
