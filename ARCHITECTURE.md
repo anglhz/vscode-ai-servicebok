@@ -1391,3 +1391,23 @@ Följ servicebehov
 Exportera historik
 
 Överför fordon till nästa ägare
+
+## Implementerad Billing V1
+
+`lib/stripe/server.ts` kapslar den officiella Stripe Node-klienten. Serveractions
+på konto använder `services/subscriptions/checkout.ts` för hosted Checkout och
+Customer Portal. Klienten får aldrig ange customer, price eller returadress.
+`services/subscriptions/index.ts` läser sessionsbunden lokal plan genom RLS/RPC och
+exponerar `getUserPlan` och `requirePremiumUser`. PDF-routen använder samma helper.
+
+`app/api/stripe/webhook/route.ts` verifierar rå signatur och delegerar till
+`services/subscriptions/webhook.ts`. Aktuell Stripe subscription hämtas inom en
+kontolease. `services/subscriptions/backend.ts` är enda konsumenten av service-role-
+fabriken `lib/supabase/admin.ts`; båda är server-only. Det lagret hanterar enbart
+privilegierade billingoperationer, mapping och atomisk webhookpersistens.
+
+Databasmigrationen centraliserar kvoter och serialiserar nya ägarrelationer och
+dokumentreservationer. Vanliga fordon/dokument/transfer-services behåller sina
+sessionsklienter och hanterar bara begripliga gränsfel. Checkout-returen kan visa
+väntestatus men kan inte aktivera Premium. Detaljer och miljökonfiguration finns
+i README:s Billing-avsnitt.

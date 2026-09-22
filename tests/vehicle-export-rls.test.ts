@@ -9,7 +9,7 @@ let v:string;
 async function asUser<T>(user:string,fn:()=>Promise<T>){await db.exec("set role authenticated");await db.query("select set_config('request.jwt.claim.sub',$1,false)",[user]);try{return await fn();}finally{await db.exec("reset role");}}
 async function snapshot(){return (await db.query<{data:unknown}>("select get_vehicle_export_data($1) as data",[v])).rows[0].data;}
 beforeAll(async()=>{
-  await db.exec(`create role anon;create role authenticated;create schema auth;create schema storage;create table auth.users(id uuid primary key);
+  await db.exec(`create role service_role bypassrls; create role anon;create role authenticated;create schema auth;create schema storage;create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
     create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text,name text,metadata jsonb,unique(bucket_id,name));

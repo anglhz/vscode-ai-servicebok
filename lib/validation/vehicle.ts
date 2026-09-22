@@ -27,7 +27,7 @@ export const createVehicleSchema = z.object({
 });
 export type VehicleInput = z.output<typeof createVehicleSchema>;
 export type VehicleField = keyof z.input<typeof createVehicleSchema>;
-export type VehicleFormState = { errors?: Partial<Record<VehicleField, string[]>>; message?: string };
+export type VehicleFormState = { errors?: Partial<Record<VehicleField, string[]>>; message?: string; premiumRequired?: boolean };
 
 // Domain response validation, not fabricated Supabase-generated database types.
 export const vehicleSchema = z.object({

@@ -26,7 +26,7 @@ async function document(v: string, ready = true) {
   return d;
 }
 beforeAll(async () => {
-  await db.exec(`create role anon; create role authenticated; create schema auth; create schema storage;
+  await db.exec(`create role service_role bypassrls; create role anon; create role authenticated; create schema auth; create schema storage;
     create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
     create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
@@ -38,6 +38,7 @@ beforeAll(async () => {
   const dir = new URL("../supabase/migrations/", import.meta.url);
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) await db.exec(readFileSync(new URL(file, dir), "utf8"));
   await db.query("insert into auth.users values($1),($2),($3)", [a,b,c]);
+  await db.exec("insert into subscriptions(user_id,plan,status,current_period_end) select id,'premium','active',now()+interval '1 year' from profiles");
 }, 30000);
 afterAll(() => db.close());
 

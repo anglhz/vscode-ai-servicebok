@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/auth/session";
 import { createVehicleSchema, type VehicleFormState } from "@/lib/validation/vehicle";
 import { createVehicle, DuplicateVehicleError, InvalidVehicleLookupError } from "@/services/vehicles";
 import { lookupVehicle } from "@/services/vehicle-data";
+import { PlanLimitError } from "@/lib/permissions/plan-limit";
 
 export async function searchVehicle(registration: string) { return lookupVehicle(registration); }
 
@@ -19,6 +20,7 @@ export async function saveVehicle(_state: VehicleFormState, formData: FormData):
   if (receipt && (typeof receipt !== "string" || formData.get("confirmed") !== "yes")) return { message: "Bekräfta fordonsuppgifterna innan du sparar." };
   try { vehicleId = await createVehicle(input, typeof receipt === "string" ? receipt : undefined); }
   catch (error) {
+    if (error instanceof PlanLimitError) return { message: error.message, premiumRequired: true };
     if (error instanceof DuplicateVehicleError) return { message: "Fordonet finns redan registrerat i Servicebok. Ingen åtkomst har ändrats." };
     if (error instanceof InvalidVehicleLookupError) return { message: "Sökningen har gått ut eller ändrats. Sök igen eller lägg till fordonet manuellt." };
     return { message: "Fordonet kunde inte sparas. Försök igen." };

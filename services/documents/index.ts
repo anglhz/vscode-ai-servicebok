@@ -1,4 +1,5 @@
 import "server-only";
+import { checkPlanLimit } from "@/lib/permissions/plan-limit";
 import { z } from "zod";
 import { requireVehicleAccess } from "@/lib/permissions/vehicle";
 import { createClient } from "@/lib/supabase/server";
@@ -26,6 +27,7 @@ export async function createDocument(vehicleId: string, eventId: string | null, 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("create_document", { p_vehicle_id: vehicleId, p_event_id: eventId,
     p_file_name: value.file_name, p_mime_type: value.mime_type, p_file_size_bytes: value.file_size_bytes, p_document_type: value.document_type });
+  checkPlanLimit(error);
   if (error) throw new Error("Dokumentet kunde inte förberedas.");
   const document = z.array(reservationSchema).length(1).parse(data)[0];
   const { data: signed, error: signError } = await supabase.storage.from(DOCUMENT_BUCKET).createSignedUploadUrl(document.storage_path, { upsert: false });

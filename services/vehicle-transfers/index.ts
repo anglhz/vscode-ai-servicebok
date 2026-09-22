@@ -1,4 +1,5 @@
 import "server-only";
+import { checkPlanLimit } from "@/lib/permissions/plan-limit";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth/session";
@@ -53,6 +54,7 @@ export async function acceptVehicleTransfer(token: string) {
   const digest = tokenHash(token);
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("accept_vehicle_transfer", { p_token_hash: digest });
+  checkPlanLimit(error);
   if (error) throw new Error("Överföringen kunde inte accepteras. Länken kan ha gått ut, avbrutits eller redan använts.");
   return z.uuid().parse(data);
 }

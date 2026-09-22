@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/browser";
 import { DOCUMENT_BUCKET, documentMimeTypes, documentTypes, documentTypeLabels, documentUploadSchema, formatFileSize, sanitizeFileName } from "@/lib/validation/document";
@@ -15,8 +16,9 @@ export function DocumentUpload({ vehicleId, eventId = null }: { vehicleId: strin
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
+  const [premiumRequired, setPremiumRequired] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setMessage(""); setSuccess(false);
+    event.preventDefault(); setMessage(""); setSuccess(false); setPremiumRequired(false);
     if (!file && !pendingId) { setMessage("Välj en fil."); return; }
     setBusy(true);
     try {
@@ -26,7 +28,7 @@ export function DocumentUpload({ vehicleId, eventId = null }: { vehicleId: strin
         const parsed = documentUploadSchema.safeParse(input);
         if (!parsed.success) { setMessage(parsed.error.issues[0].message); return; }
         const prepared = await prepareUpload(vehicleId, eventId, input);
-        if (!prepared.upload) { setMessage(prepared.error ?? "Dokumentet kunde inte förberedas."); return; }
+        if (!prepared.upload) { setPremiumRequired(Boolean(prepared.premiumRequired)); setMessage(prepared.error ?? "Dokumentet kunde inte förberedas."); return; }
         const upload = prepared.upload;
         const { error } = await createClient().storage.from(DOCUMENT_BUCKET).uploadToSignedUrl(upload.path, upload.token, file, { contentType: file.type });
         if (error) { await cancelUpload(vehicleId, upload.id); setMessage("Dokumentet kunde inte laddas upp. Försök igen."); return; }
@@ -65,6 +67,7 @@ export function DocumentUpload({ vehicleId, eventId = null }: { vehicleId: strin
     </div>
     {file && <p className="break-words text-sm">{sanitizeFileName(file.name)} · {file.type || "Okänd filtyp"} · {formatFileSize(file.size)}</p>}
     {message && <p role={success ? "status" : "alert"} className={success ? "text-sm" : "text-sm text-destructive"}>{message}</p>}
+    {premiumRequired && <Link href="/account" className="inline-flex min-h-12 items-center text-sm underline">Se Premium och uppgradera</Link>}
     <div className="flex flex-wrap gap-3"><Button type="submit" disabled={busy} aria-busy={busy} className="min-h-12">{busy ? "Laddar upp…" : pendingId ? "Bekräfta igen" : "Ladda upp"}</Button>
       {pendingId && <Button type="button" variant="outline" disabled={busy} onClick={cancel} className="min-h-12">Avbryt uppladdning</Button>}
     </div>
