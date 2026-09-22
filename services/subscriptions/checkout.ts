@@ -39,6 +39,8 @@ export async function startCheckout() {
   return withBillingLease(user.id, async (initial, savedCustomer) => {
     let operation = initial, customer = savedCustomer;
     if (!customer) {
+      operation = await updateBillingOperation(user.id, operation.lease_token, "customer_start", {});
+      if (!operation.customer_started_at) throw new Error("Customer attempt not started");
       // Stripe may prune idempotency keys after 24h. Ambiguous old attempts need
       // reconciliation, never an automatic second Customer.
       if (Date.now() - Date.parse(operation.customer_started_at) > 23 * 3600000) throw new Error("Customer reconciliation required");

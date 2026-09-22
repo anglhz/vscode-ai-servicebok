@@ -98,6 +98,29 @@ it("selected transferred documents move quota; over-quota transfer is entirely r
   await db.query("insert into subscriptions(user_id,plan,status,current_period_end) values($1,'premium','active',now()+interval '1 month')",[buyer]);
   await accept();expect((await overview(buyer)).document_bytes).toBe(62914560);expect((await overview(seller)).document_bytes).toBe(0);
 });
+type CustomerOperation = {lease_token:string;customer_key:string;customer_started_at:string|null};
+async function acquire(user:string) {return (await db.query<{v:{operation:CustomerOperation}}>("select billing_acquire($1) as v",[user])).rows[0].v.operation;}
+async function customerStart(user:string,lease:string) {return (await db.query<{v:CustomerOperation}>("select billing_operation($1,$2,'customer_start') as v",[user,lease])).rows[0].v;}
+it("ordinary billing leases never start a Customer attempt, including reacquisition",async()=>{
+  const user=await account(),first=await acquire(user);expect(first.customer_started_at).toBeNull();
+  await db.query("select billing_operation($1,$2,'release')",[user,first.lease_token]);
+  const second=await acquire(user);expect(second.customer_started_at).toBeNull();expect(second.customer_key).toBe(first.customer_key);
+});
+it("customer_start requires the lease, persists start time, and retains key/time on retry",async()=>{
+  const user=await account(),initial=await acquire(user);
+  await expect(customerStart(user,randomUUID())).rejects.toMatchObject({code:"55P03"});
+  const first=await customerStart(user,initial.lease_token);
+  expect(first.customer_started_at).not.toBeNull();expect(first.customer_key).toBe(initial.customer_key);
+  await db.query("select billing_operation($1,$2,'release')",[user,initial.lease_token]);
+  const retryLease=await acquire(user),retry=await customerStart(user,retryLease.lease_token);
+  expect(retry.customer_started_at).toBe(first.customer_started_at);expect(retry.customer_key).toBe(first.customer_key);
+});
+it("an existing Stripe Customer prevents customer_start from initializing an attempt",async()=>{
+  const user=await account(),initial=await acquire(user);
+  await db.query("select billing_operation($1,$2,'customer',$3)",[user,initial.lease_token,JSON.stringify({id:`cus_${user}`})]);
+  const operation=await customerStart(user,initial.lease_token);
+  expect(operation.customer_started_at).toBeNull();expect(operation.customer_key).toBe(initial.customer_key);
+});
 it("lease prevents overlapping billing workers; webhook state and processed marker commit atomically", async () => {
   const user=await account();
   const lease=(await db.query<{v:{operation:{lease_token:string}}}>("select billing_acquire($1) as v",[user])).rows[0].v.operation.lease_token;

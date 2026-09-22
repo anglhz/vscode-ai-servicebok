@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const operationSchema = z.object({
-  lease_token: z.string().nullable(), customer_key: z.string(), customer_started_at: z.string(),
+  lease_token: z.string().nullable(), customer_key: z.string(), customer_started_at: z.string().nullable(),
   checkout_key: z.string().nullable(), checkout_expires_at: z.number().nullable(),
   checkout_price_id: z.string().nullable(), checkout_origin: z.string().nullable(), checkout_session_id: z.string().nullable(),
 });

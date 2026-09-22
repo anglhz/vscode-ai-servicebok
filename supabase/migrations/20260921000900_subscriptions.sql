@@ -55,8 +55,8 @@ begin
   insert into public.billing_operations(user_id) values(p_user_id) on conflict(user_id) do nothing;
   select * into operation from public.billing_operations where user_id=p_user_id for update;
   if operation.lease_expires_at>clock_timestamp() then raise exception 'Billing busy' using errcode='55P03'; end if;
-  update public.billing_operations set lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()+interval '2 minutes',
-    customer_started_at=coalesce(customer_started_at,clock_timestamp()) where user_id=p_user_id returning * into operation;
+  update public.billing_operations set lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()+interval '2 minutes'
+    where user_id=p_user_id returning * into operation;
   select * into subscription from public.subscriptions where user_id=p_user_id;
   return jsonb_build_object('operation',to_jsonb(operation),'subscription',to_jsonb(subscription));
 end;
@@ -70,7 +70,13 @@ begin
   if not found or operation.lease_token is distinct from p_lease or operation.lease_expires_at<=clock_timestamp() then
     raise exception 'Billing lease expired' using errcode='55P03';
   end if;
-  if p_action='customer' then
+  if p_action='customer_start' then
+    -- A lease alone is not a Customer attempt. Preserve the recovery key/time
+    -- across retries, and never start an attempt for an already mapped Customer.
+    update public.billing_operations set customer_started_at=coalesce(customer_started_at,clock_timestamp())
+      where user_id=p_user_id and exists(select 1 from public.subscriptions
+        where user_id=p_user_id and stripe_customer_id is null);
+  elsif p_action='customer' then
     update public.subscriptions set stripe_customer_id=p_value->>'id' where user_id=p_user_id
       and (stripe_customer_id is null or stripe_customer_id=p_value->>'id');
     if not found then raise exception 'Customer mismatch'; end if;

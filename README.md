@@ -984,8 +984,13 @@ success/cancel/portal-return kommer enbart från serverkod. Retur sker till
 Success-parametern visar bara ett meddelande och kan aldrig ändra planen.
 
 En databaslease per konto serialiserar billing över flera serverinstanser.
-Customer-nyckeln är beständig; varje Checkout-försök har en sparad idempotency key,
-serverkonfiguration och en timmes sessionstid. En öppen session återanvänds.
+Customer-nyckeln är beständig.
+`customer_started_at` sätts endast av den explicita operationen `customer_start`
+under giltig kontolease, omedelbart före första Stripe Customer-anropet. Att öppna
+portalen eller ta en vanlig lease startar ingen 23-timmarsperiod. Återförsök
+behåller både ursprunglig Customer-nyckel och tidsstämpel; befintligt Customer-ID
+återanvänds utan nytt Customer-försök.
+Varje Checkout-försök har en sparad idempotency key, serverkonfiguration och en timmes sessionstid. En öppen session återanvänds.
 Förlorade svar återhämtas med samma nyckel/parametrar. Ett fullbordat Checkout med
 väntande subscription återgår till kontosidan. Befintlig icke-terminal Stripe
 subscription, inklusive försenad/incomplete, går till portalen i stället för att
@@ -1075,13 +1080,13 @@ Premium så deras tidigare säkerhetstester fortsätter gälla oberoende av ny g
 transaktioner i isolerad lokal PostgreSQL (se tidigare instruktion för pg-modul).
 
 Kör `npm test`, `npm run typecheck`, `npm run lint`, `npm run build` före merge.
-Verifierat i denna ändring: **376 tester** i 29 filer (57 fler än föregående
+Verifierat i denna ändring: **382 tester** i 29 filer (63 fler än föregående
 version), samt **7 separata native PostgreSQL-samtidighetstester** (4 nya).
 Typecheck, lint och produktionsbygge passerar. Hela Vitest-sviten kördes med
 `npm test -- --maxWorkers=2`. Produktionsbyggets Free/Premium-konto, väntestatus,
 generiskt Checkout-fel, Free PDF-spärr och Premium PDF-nedladdning kontrollerades
 vid 320, 390 och 1280 px med lokal Auth/PostgREST-fixture och riktiga SQL/RLS-regler.
-Ingen horisontell overflow eller JavaScript-krasch upptäcktes.
+Ingen horisontell overflow eller JavaScript-krasch upptäcktes. Customer-start-korrigeringen lägger till sex regressionstester: Portal följt av första Checkout efter 24 timmar, återförsök med samma nyckel/tid, misslyckad customer_start, vanlig lease utan Customer-start, atomisk start/retry under lease och befintlig Customer. Testet för verkligt tvetydiga försök äldre än 23 timmar behålls.
 
 Lokala Stripe credentials och Stripe CLI saknas i denna arbetsmiljö; riktiga
 hosted Checkout/Portal-betalningar och webhookleverans måste därför verifieras
