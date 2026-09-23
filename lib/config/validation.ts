@@ -30,10 +30,13 @@ export function configurationIssues(feature: ConfigFeature, env: Environment): s
     }
   }
   if (feature === "billing") {
-    for (const name of ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PREMIUM_PRICE_ID", "SUPABASE_SERVICE_ROLE_KEY"]) required(name);
+    for (const name of ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PREMIUM_MONTHLY_PRICE_ID", "STRIPE_PREMIUM_YEARLY_PRICE_ID", "SUPABASE_SERVICE_ROLE_KEY"]) required(name);
     if (!/^(sk|rk)_(test|live)_[A-Za-z0-9]+$/.test(env.STRIPE_SECRET_KEY ?? "")) issues.push("STRIPE_SECRET_KEY: expected server API key");
     if (!/^whsec_[A-Za-z0-9]+$/.test(env.STRIPE_WEBHOOK_SECRET ?? "")) issues.push("STRIPE_WEBHOOK_SECRET: expected signing secret");
-    if (!/^price_[A-Za-z0-9]+$/.test(env.STRIPE_PREMIUM_PRICE_ID ?? "")) issues.push("STRIPE_PREMIUM_PRICE_ID: expected Price ID");
+    for (const name of ["STRIPE_PREMIUM_MONTHLY_PRICE_ID", "STRIPE_PREMIUM_YEARLY_PRICE_ID"]) {
+      if (!/^price_[A-Za-z0-9]+$/.test(env[name] ?? "")) issues.push(name + ": expected Price ID");
+    }
+    if (env.STRIPE_PREMIUM_MONTHLY_PRICE_ID && env.STRIPE_PREMIUM_MONTHLY_PRICE_ID === env.STRIPE_PREMIUM_YEARLY_PRICE_ID) issues.push("STRIPE_PREMIUM_MONTHLY_PRICE_ID / STRIPE_PREMIUM_YEARLY_PRICE_ID: distinct prices required");
     if (env.VERCEL_ENV === "preview" && !/^(sk|rk)_test_/.test(env.STRIPE_SECRET_KEY ?? "")) issues.push("STRIPE_SECRET_KEY: preview requires test mode");
   }
   if (feature === "lookup") {

@@ -9,7 +9,10 @@ export function subscriptionState(subscription: Stripe.Subscription, userId: str
   const statuses = ["active", "trialing", "past_due", "canceled", "unpaid", "incomplete", "incomplete_expired", "paused"];
   const item = subscription.items.data[0];
   const matches = subscription.items.data.length === 1 && !subscription.items.has_more && item?.quantity === 1 &&
-    item.price.id === stripeEnvironment("STRIPE_PREMIUM_PRICE_ID") && item.price.recurring?.interval === "month" && item.price.recurring.interval_count === 1;
+    item.price.recurring?.interval_count === 1 && (
+      (item.price.id === stripeEnvironment("STRIPE_PREMIUM_MONTHLY_PRICE_ID") && item.price.recurring.interval === "month") ||
+      (item.price.id === stripeEnvironment("STRIPE_PREMIUM_YEARLY_PRICE_ID") && item.price.recurring.interval === "year")
+    );
   return {
     id: subscription.id, customer, price: item?.price.id ?? null, price_matches: Boolean(matches),
     status: statuses.includes(subscription.status) ? subscription.status : "inactive",

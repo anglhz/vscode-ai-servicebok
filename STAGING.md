@@ -19,7 +19,8 @@ byggs in i klienten: ändring kräver nytt bygge. Övriga variabler är server-o
 | SUPABASE_SERVICE_ROLE_KEY | Required för Billing | Server secret | Endast testprojekt | Endast produktionsprojekt |
 | STRIPE_SECRET_KEY | Required för Billing | Server secret | sk_test/rk_test; live nekas i Vercel Preview | Avsedd separat livekonfiguration efter releasegodkännande |
 | STRIPE_WEBHOOK_SECRET | Required för Billing | Server secret | Stagingendpointens whsec; CLI har eget secret | Produktionsendpointens eget secret |
-| STRIPE_PREMIUM_PRICE_ID | Required för Billing | Server | Testpris, recurring/month/antal 1 | Livepris, samma månadsmodell; inget hårdkodat belopp |
+| STRIPE_PREMIUM_MONTHLY_PRICE_ID | Required för Billing | Server | Testpris 39 SEK, month/1, antal 1 | Eget livepris 39 SEK/månad |
+| STRIPE_PREMIUM_YEARLY_PRICE_ID | Required för Billing | Server | Testpris 349 SEK, year/1, antal 1 | Eget livepris 349 SEK/år |
 | VEHICLE_PROVIDER | Optional | Server | Tomt för manuell registrering, annars http-json | Egen providerkonfiguration |
 | VEHICLE_API_BASE_URL | Required om lookup aktiveras | Server | HTTPS-testadapter, ingen query/credentials | Avtalad HTTPS-adapter |
 | VEHICLE_API_KEY | Required om lookup aktiveras | Server secret | Provider-testnyckel | Separat produktionsnyckel |
@@ -32,7 +33,7 @@ med variabelnamn och användarens befintliga manuella fallback. Lookupnyckeln i
 README:s lookup-avsnitt; tabellen får vara tom under alla migrationer. Ge inte
 klientroller åtkomst till den. Secretrotation ogiltigförklarar tidigare receipts.
 
-Billing validerar APP_URL, Supabase-konfiguration och alla fyra billingvariabler
+Billing validerar APP_URL, Supabase-konfiguration och alla fem billingvariabler
 innan Stripe-klienten används. Generiska användarfel behålls. Detta bevisar inte
 nycklarnas giltighet, rätt Stripe-konto eller rätt Supabase-projekt: verifiera dessa
 med riktiga testflöden. Ingen validering kräver secrets vid `npm run build`.
@@ -135,7 +136,7 @@ releaseprotokollet; lokala fixture-roller är aldrig migrationsfiler för hostin
   staging-SMTP med kontrollerade testadresser. Verifiera sender/delivery/rate limits.
 - Skapa tre separata konton A/B/C. Förvara lösenorden utanför Git. Använd separata
   browserprofiler; inga förfalskade JWT:er i hosted-tester.
-- Skapa Stripe test Product/monthly Price och konfigurera Portal. Registrera sex
+- Använd Stripe test Product med månadspris 39 SEK och årspris 349 SEK och konfigurera Portal. Registrera sex
   events från README till `APP_URL/api/stripe/webhook` med API-version
   `2026-08-26.dahlia`. Välj testläge även när Dashboard har ett separat livekonto.
 - Kör [smoke-/A/B/C-protokollet](docs/SMOKE_TEST.md). Dokumentera för varje rad:
@@ -149,3 +150,18 @@ Officiella driftreferenser:
 [Vercel Git/branch-deployments](https://vercel.com/docs/git),
 [Supabase backups](https://supabase.com/docs/guides/platform/backups),
 [Stripe webhooks](https://docs.stripe.com/webhooks).
+
+### Övergång till månads- och årsval
+
+Efter merge: ange `STRIPE_PREMIUM_MONTHLY_PRICE_ID` och
+`STRIPE_PREMIUM_YEARLY_PRICE_ID` som **servervariabler i Vercel staging/Preview**,
+med de redan skapade testpriserna, och gör en ny deployment. Det gamla
+`STRIPE_PREMIUM_PRICE_ID` används inte längre och kan tas bort. Månadsvariabeln
+ska behålla det tidigare månadsprisets ID för befintliga abonnemang. De två nya
+variablerna måste vara olika och finnas samtidigt; saknad konfiguration blockerar
+Billing. Skriv aldrig konkreta Price IDs eller secrets i källkod/tester.
+
+Verifiera både månads- och års-Checkout → webhook → Premium, samt Portal,
+cancel/success, dubbla klick och byte av val efter avbruten Checkout. Kontrollera
+att Stripe visar samma belopp/valuta som Konto före bekräftelse. Befintliga
+subscriptions hanteras fortsatt i Portal. Ingen databasändring krävs.

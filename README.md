@@ -15,7 +15,7 @@ Kopiera `.env.example` till `.env.local` (PowerShell: `Copy-Item .env.example .e
 Ange servervariabeln `APP_URL=http://localhost:3000` samt
 `NEXT_PUBLIC_SUPABASE_URL` och `NEXT_PUBLIC_SUPABASE_ANON_KEY` från ett
 Supabase-utvecklingsprojekt. Billing kräver även servervariabeln
-`SUPABASE_SERVICE_ROLE_KEY` och de tre Stripe-variablerna i `.env.example`.
+`SUPABASE_SERVICE_ROLE_KEY` och de fyra Stripe-variablerna i `.env.example`.
 Service role får aldrig exponeras för webbläsaren.
 
 Applicera migrationerna i en utvecklingsmiljö före signup och fordonsregistrering. Lokal Supabase kräver Docker
@@ -948,11 +948,14 @@ publishable key eller Stripe-kod i browsern. Inga Product/Price skapas automatis
 
 ### Konfiguration och lokal testning
 
-1. Skapa manuellt en Product och en återkommande **månatlig** Price i Stripe
-   testläge. Välj belopp/valuta där; appen hårdkodar inget belopp. Konfigurera
+1. Använd en Premium Product med två återkommande priser i Stripe testläge:
+   **39 SEK/månad** (`month`, `interval_count=1`) och **349 SEK/år** (`year`,
+   `interval_count=1`). Konto visar dessa belopp; konfigurera motsvarande priser
+   i Stripe, som är källan för själva debiteringen. Konfigurera
    Customer Portal för betalmetod, fakturor och uppsägning. Tillåt inte byte till
    orelaterade produkter eller antal platser i portalen.
-2. Ange `STRIPE_SECRET_KEY`, `STRIPE_PREMIUM_PRICE_ID` och
+2. Ange `STRIPE_SECRET_KEY`, `STRIPE_PREMIUM_MONTHLY_PRICE_ID`,
+   `STRIPE_PREMIUM_YEARLY_PRICE_ID` och
    `SUPABASE_SERVICE_ROLE_KEY` på servern. Behåll `NEXT_PUBLIC_SUPABASE_URL` och
    `NEXT_PUBLIC_SUPABASE_ANON_KEY`. `APP_URL` är miljöns fasta bas-URL, exempelvis
    `http://localhost:3000`; aldrig en request Host header eller formulärparameter.
@@ -993,7 +996,13 @@ under giltig kontolease, omedelbart före första Stripe Customer-anropet. Att �
 portalen eller ta en vanlig lease startar ingen 23-timmarsperiod. Återförsök
 behåller både ursprunglig Customer-nyckel och tidsstämpel; befintligt Customer-ID
 återanvänds utan nytt Customer-försök.
-Varje Checkout-försök har en sparad idempotency key, serverkonfiguration och en timmes sessionstid. En öppen session återanvänds.
+Klienten skickar endast `plan=monthly` eller `plan=yearly`; servern validerar valet
+ och mappar till respektive Price-ID. Andra värden nekas; extra Price-ID-fält ignoreras.
+Varje Checkout-försök har en sparad idempotency key, serverkonfiguration och en timmes sessionstid. En öppen session för samma pris återanvänds.
+Vid byte mellan månads-/årsval [stängs den gamla öppna sessionen först via Stripe](https://docs.stripe.com/api/checkout/sessions/expire)
+under samma lease, innan en ny nyckel skapas. Ett tvetydigt tidigare försök
+återhämtas med ursprungliga parametrar före bytet. Misslyckad stängning blockerar
+ny Checkout; redan slutförd betalning inväntar webhook.
 Förlorade svar återhämtas med samma nyckel/parametrar. Ett fullbordat Checkout med
 väntande subscription återgår till kontosidan. Befintlig icke-terminal Stripe
 subscription, inklusive försenad/incomplete, går till portalen i stället för att
@@ -1032,8 +1041,10 @@ backend-RPC:er är spärrade. Eventtabell och lease-tabell är helt privata.
 
 ### Entitlement och gränser
 
-Den centrala SQL-regeln `is_premium_user` kräver konfigurerat månadspris, exakt en
-subscription item med antal 1, lokal plan Premium, `active` eller `trialing` och
+Webhook accepterar endast månadsprisets ID med `month`/1 eller årsprisets ID med
+`year`/1, exakt en subscription item med antal 1. Okänt ID eller fel intervall
+ger inte Premium. Den centrala SQL-regeln `is_premium_user` kräver lokal plan
+Premium, `active` eller `trialing` och
 `current_period_end > now()`. Pris-matchning sker vid webhookens synkning.
 `past_due` ger **omedelbart Free** i denna enkla V1. `canceled`, `unpaid`,
 `incomplete`, `incomplete_expired`, `paused` och `inactive` ger också Free.

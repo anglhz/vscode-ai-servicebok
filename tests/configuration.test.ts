@@ -6,9 +6,9 @@ import { getStripe } from "@/lib/stripe/server";
 import { logBilling } from "@/lib/observability/billing";
 import nextConfig from "../next.config";
 afterEach(()=>{vi.unstubAllEnvs();vi.restoreAllMocks();});
-const env={APP_URL:"https://staging.example",NEXT_PUBLIC_SUPABASE_URL:"https://test.supabase.co",NEXT_PUBLIC_SUPABASE_ANON_KEY:"sb_publishable_fixture",SUPABASE_SERVICE_ROLE_KEY:"fixture",STRIPE_SECRET_KEY:"sk_test_fixture",STRIPE_WEBHOOK_SECRET:"whsec_fixture",STRIPE_PREMIUM_PRICE_ID:"price_fixture",VERCEL_ENV:"preview"};
+const env={APP_URL:"https://staging.example",NEXT_PUBLIC_SUPABASE_URL:"https://test.supabase.co",NEXT_PUBLIC_SUPABASE_ANON_KEY:"sb_publishable_fixture",SUPABASE_SERVICE_ROLE_KEY:"fixture",STRIPE_SECRET_KEY:"sk_test_fixture",STRIPE_WEBHOOK_SECRET:"whsec_fixture",STRIPE_PREMIUM_MONTHLY_PRICE_ID:"price_monthly",STRIPE_PREMIUM_YEARLY_PRICE_ID:"price_yearly",VERCEL_ENV:"preview"};
 it("accepts complete staging config and disabled optional lookup",()=>{for(const feature of ["app","supabase","billing","lookup"] as const)expect(configurationIssues(feature,env)).toEqual([]);});
-it.each(["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PREMIUM_PRICE_ID","SUPABASE_SERVICE_ROLE_KEY"])("rejects partial billing missing %s",name=>{expect(configurationIssues("billing",{...env,[name]:""}).join()).toContain(name);});
+it.each(["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PREMIUM_MONTHLY_PRICE_ID","STRIPE_PREMIUM_YEARLY_PRICE_ID","SUPABASE_SERVICE_ROLE_KEY"])("rejects partial billing missing %s",name=>{expect(configurationIssues("billing",{...env,[name]:""}).join()).toContain(name);});
 it("rejects live Stripe keys in preview",()=>{expect(configurationIssues("billing",{...env,STRIPE_SECRET_KEY:"sk_live_fixture"}).join()).toContain("test mode");});
 it("missing webhook config fails before Stripe initialization without logging values",()=>{
   for(const [name,value] of Object.entries(env))vi.stubEnv(name,value);
@@ -30,4 +30,11 @@ it("global anti-framing/nosniff headers and private transfer headers coexist",as
   const rules=await nextConfig.headers!();const global=rules.find(r=>r.source==="/:path*")!,transfer=rules.find(r=>r.source==="/transfer/:path*")!;
   expect(global.headers).toContainEqual({key:"X-Content-Type-Options",value:"nosniff"});expect(global.headers).toContainEqual({key:"Content-Security-Policy",value:"frame-ancestors 'none'"});
   expect(transfer.headers).toContainEqual({key:"Cache-Control",value:"private, no-store"});expect(transfer.headers).toContainEqual({key:"X-Robots-Tag",value:"noindex, nofollow, noarchive"});
+});
+
+it("rejects identical monthly/yearly price configuration",()=>{
+  expect(configurationIssues("billing",{...env,STRIPE_PREMIUM_YEARLY_PRICE_ID:env.STRIPE_PREMIUM_MONTHLY_PRICE_ID}).join()).toContain("distinct prices");
+});
+it.each(["STRIPE_PREMIUM_MONTHLY_PRICE_ID","STRIPE_PREMIUM_YEARLY_PRICE_ID"])("rejects malformed %s",name=>{
+  expect(configurationIssues("billing",{...env,[name]:"not-a-price"}).join()).toContain(name);
 });
