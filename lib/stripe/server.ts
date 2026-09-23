@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import { configurationIssues } from "@/lib/config/validation";
 
 let client: Stripe | undefined;
-export function stripeEnvironment(name: "STRIPE_SECRET_KEY" | "STRIPE_WEBHOOK_SECRET" | "STRIPE_PREMIUM_PRICE_ID") {
+export function stripeEnvironment(name: "STRIPE_SECRET_KEY" | "STRIPE_WEBHOOK_SECRET" | "STRIPE_PREMIUM_MONTHLY_PRICE_ID" | "STRIPE_PREMIUM_YEARLY_PRICE_ID") {
   const value = process.env[name];
   if (!value) throw new Error("Billing configuration is missing.");
   return value;

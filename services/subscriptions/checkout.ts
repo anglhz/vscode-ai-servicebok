@@ -33,9 +33,10 @@ function checkoutParameters(userId: string, customer: string, operation: Billing
     expires_at: operation.checkout_expires_at,
   };
 }
-export async function startCheckout() {
+export async function startCheckout(plan: unknown) {
   const user = await requireUser();
-  const origin = getAppUrl(), price = stripeEnvironment("STRIPE_PREMIUM_PRICE_ID"), stripe = getStripe();
+  if (plan !== "monthly" && plan !== "yearly") throw new Error("Invalid billing plan");
+  const origin = getAppUrl(), price = stripeEnvironment(plan === "monthly" ? "STRIPE_PREMIUM_MONTHLY_PRICE_ID" : "STRIPE_PREMIUM_YEARLY_PRICE_ID"), stripe = getStripe();
   return withBillingLease(user.id, async (initial, savedCustomer) => {
     let operation = initial, customer = savedCustomer;
     if (!customer) {
@@ -59,10 +60,23 @@ export async function startCheckout() {
       if (sessions.has_more) throw new Error("Checkout reconciliation required");
       existing = sessions.data.find(s => s.metadata?.operation === operation.checkout_key);
     }
+    // Recover an ambiguous attempt with its original key/parameters before switching.
+    if (!existing && operation.checkout_key && operation.checkout_price_id !== price && (operation.checkout_expires_at ?? 0) > Date.now() / 1000) {
+      existing = await stripe.checkout.sessions.create(checkoutParameters(user.id, customer, operation), {
+        idempotencyKey: "servicebok-checkout:" + operation.checkout_key,
+      });
+      await updateBillingOperation(user.id, operation.lease_token, "session", { id: existing.id });
+    }
     if (existing) {
       const existingCustomer = typeof existing.customer === "string" ? existing.customer : existing.customer?.id;
       if (existingCustomer !== customer) throw new Error("Customer mismatch");
-      if (existing.status === "open") return hostedUrl(existing.url, "checkout.stripe.com");
+      if (existing.status === "open") {
+        if (operation.checkout_price_id === price) return hostedUrl(existing.url, "checkout.stripe.com");
+        // A successful expire is required before allocating a new key. If payment
+        // wins the race or Stripe is unavailable, fail closed and retry/reconcile.
+        existing = await stripe.checkout.sessions.expire(existing.id);
+        if (existing.status !== "expired") throw new Error("Checkout reconciliation required");
+      }
       if (existing.status === "complete" && subscriptions.data.length === 0) return `${origin}/account?checkout=success`;
     }
     if (!operation.checkout_key || existing?.status === "expired" || existing?.status === "complete" || (operation.checkout_expires_at ?? 0) <= Date.now() / 1000) {

@@ -1,10 +1,10 @@
 import { afterEach,beforeEach,expect,it,vi } from "vitest";
 import Stripe from "stripe";
 vi.mock("server-only",()=>({}));
-const m=vi.hoisted(()=>({user:vi.fn(),lease:vi.fn(),operation:vi.fn(),find:vi.fn(),processed:vi.fn(),apply:vi.fn(),customer:vi.fn(),list:vi.fn(),retrieve:vi.fn(),checkout:vi.fn(),session:vi.fn(),sessions:vi.fn(),portal:vi.fn()}));
+const m=vi.hoisted(()=>({user:vi.fn(),lease:vi.fn(),operation:vi.fn(),find:vi.fn(),processed:vi.fn(),apply:vi.fn(),customer:vi.fn(),list:vi.fn(),retrieve:vi.fn(),checkout:vi.fn(),session:vi.fn(),expire:vi.fn(),sessions:vi.fn(),portal:vi.fn()}));
 vi.mock("@/lib/auth/session",()=>({requireUser:m.user}));
 vi.mock("@/services/subscriptions/backend",()=>({withBillingLease:m.lease,updateBillingOperation:m.operation,findBillingUser:m.find,wasEventProcessed:m.processed,applySubscription:m.apply}));
-vi.mock("@/lib/stripe/server",()=>({getStripe:()=>({customers:{create:m.customer},subscriptions:{list:m.list,retrieve:m.retrieve},checkout:{sessions:{create:m.checkout,retrieve:m.session,list:m.sessions}},billingPortal:{sessions:{create:m.portal}},webhooks:new Stripe("sk_test_fixture").webhooks}),stripeEnvironment:(name:string)=>{const value=process.env[name];if(!value)throw Error("missing");return value;}}));
+vi.mock("@/lib/stripe/server",()=>({getStripe:()=>({customers:{create:m.customer},subscriptions:{list:m.list,retrieve:m.retrieve},checkout:{sessions:{create:m.checkout,retrieve:m.session,list:m.sessions,expire:m.expire}},billingPortal:{sessions:{create:m.portal}},webhooks:new Stripe("sk_test_fixture").webhooks}),stripeEnvironment:(name:string)=>{const value=process.env[name];if(!value)throw Error("missing");return value;}}));
 import { startCheckout,startPortal } from "@/services/subscriptions/checkout";
 import { processBillingEvent,subscriptionState } from "@/services/subscriptions/webhook";
 import { POST } from "@/app/api/stripe/webhook/route";
@@ -16,58 +16,59 @@ const operation={lease_token:"lease",customer_key:"customer-key",customer_starte
 const subscription=(status="active",price="price_monthly")=>({id:"sub_current",customer:"cus_own",created:1720000000,status,metadata:{user_id:user},cancel_at_period_end:false,items:{has_more:false,data:[{quantity:1,current_period_end:4102444800,price:{id:price,recurring:{interval:"month",interval_count:1}}}]}} as unknown as Stripe.Subscription);
 const event=(type="customer.subscription.updated",object:unknown=subscription())=>({id:"evt_test",type,created:1720000000,data:{object}} as Stripe.Event);
 beforeEach(()=>{
-  vi.resetAllMocks();vi.stubEnv("APP_URL","https://servicebok.example");vi.stubEnv("STRIPE_PREMIUM_PRICE_ID","price_monthly");vi.stubEnv("STRIPE_WEBHOOK_SECRET","whsec_fixture");
+  vi.resetAllMocks();vi.stubEnv("APP_URL","https://servicebok.example");vi.stubEnv("STRIPE_PREMIUM_MONTHLY_PRICE_ID","price_monthly");vi.stubEnv("STRIPE_PREMIUM_YEARLY_PRICE_ID","price_yearly");vi.stubEnv("STRIPE_WEBHOOK_SECRET","whsec_fixture");
   customer="cus_own";Object.assign(operation,{customer_started_at:null,checkout_key:null,checkout_session_id:null,checkout_expires_at:null,checkout_price_id:null,checkout_origin:null});
   m.user.mockResolvedValue({id:user});m.lease.mockImplementation((_user,work)=>work({...operation},customer));
   m.operation.mockImplementation((_user,_lease,action,value)=>{if(action==="customer_start")operation.customer_started_at ??= new Date().toISOString();if(action==="checkout")Object.assign(operation,{checkout_key:"attempt-key",checkout_price_id:value.price,checkout_origin:value.origin,checkout_expires_at:Math.floor(Date.now()/1000)+3600});return {...operation};});
-  m.list.mockResolvedValue({data:[],has_more:false});m.customer.mockResolvedValue({id:"cus_own"});m.checkout.mockResolvedValue({id:"cs_test",status:"open",url:"https://checkout.stripe.com/c/pay/test"});m.portal.mockResolvedValue({url:"https://billing.stripe.com/p/session/test"});
+  m.list.mockResolvedValue({data:[],has_more:false});m.customer.mockResolvedValue({id:"cus_own"});m.checkout.mockResolvedValue({id:"cs_test",customer:"cus_own",status:"open",url:"https://checkout.stripe.com/c/pay/test"});m.portal.mockResolvedValue({url:"https://billing.stripe.com/p/session/test"});
+  m.expire.mockResolvedValue({id:"cs_old",customer:"cus_own",status:"expired"});
   m.processed.mockResolvedValue(false);m.find.mockResolvedValue(user);m.retrieve.mockResolvedValue(subscription());
 });
 afterEach(()=>{vi.unstubAllEnvs();vi.useRealTimers();});
-it("unauthenticated checkout does not reach privileged backend or Stripe",async()=>{m.user.mockRejectedValue(Error("login"));await expect(startCheckout()).rejects.toThrow("login");expect(m.lease).not.toHaveBeenCalled();expect(m.checkout).not.toHaveBeenCalled();});
+it("unauthenticated checkout does not reach privileged backend or Stripe",async()=>{m.user.mockRejectedValue(Error("login"));await expect(startCheckout("monthly")).rejects.toThrow("login");expect(m.lease).not.toHaveBeenCalled();expect(m.checkout).not.toHaveBeenCalled();});
 it("Free checkout reuses own customer, fixed monthly price and APP_URL",async()=>{
-  expect(await startCheckout()).toContain("checkout.stripe.com");
+  expect(await startCheckout("monthly")).toContain("checkout.stripe.com");
   expect(m.customer).not.toHaveBeenCalled();expect(m.operation).not.toHaveBeenCalledWith(user,"lease","customer_start",expect.anything());expect(m.checkout).toHaveBeenCalledWith(expect.objectContaining({mode:"subscription",customer:"cus_own",line_items:[{price:"price_monthly",quantity:1}],success_url:"https://servicebok.example/account?checkout=success",cancel_url:"https://servicebok.example/account?checkout=cancelled"}),{idempotencyKey:"servicebok-checkout:attempt-key"});
 });
-it("creates customer with stable idempotency and saves the relation before checkout",async()=>{customer=null;await startCheckout();expect(m.customer).toHaveBeenCalledWith({metadata:{user_id:user}},{idempotencyKey:"servicebok-customer:customer-key"});expect(m.operation.mock.calls[0]).toEqual([user,"lease","customer_start",{}]);expect(m.operation.mock.calls[1]).toEqual([user,"lease","customer",{id:"cus_own"}]);expect(operation.customer_started_at).not.toBeNull();expect(m.operation.mock.invocationCallOrder[0]).toBeLessThan(m.customer.mock.invocationCallOrder[0]);});
-it("ambiguous customer attempt older than key retention fails closed",async()=>{customer=null;operation.customer_started_at="2020-01-01";await expect(startCheckout()).rejects.toThrow("reconciliation");expect(m.customer).not.toHaveBeenCalled();});
+it("creates customer with stable idempotency and saves the relation before checkout",async()=>{customer=null;await startCheckout("monthly");expect(m.customer).toHaveBeenCalledWith({metadata:{user_id:user}},{idempotencyKey:"servicebok-customer:customer-key"});expect(m.operation.mock.calls[0]).toEqual([user,"lease","customer_start",{}]);expect(m.operation.mock.calls[1]).toEqual([user,"lease","customer",{id:"cus_own"}]);expect(operation.customer_started_at).not.toBeNull();expect(m.operation.mock.invocationCallOrder[0]).toBeLessThan(m.customer.mock.invocationCallOrder[0]);});
+it("ambiguous customer attempt older than key retention fails closed",async()=>{customer=null;operation.customer_started_at="2020-01-01";await expect(startCheckout("monthly")).rejects.toThrow("reconciliation");expect(m.customer).not.toHaveBeenCalled();});
 it("failed Portal without Customer does not age the first Checkout attempt after 24 hours",async()=>{
   vi.useFakeTimers();vi.setSystemTime(new Date("2026-09-21T10:00:00Z"));customer=null;
   await expect(startPortal()).rejects.toThrow("No billing customer");
   expect(operation.customer_started_at).toBeNull();expect(m.operation).not.toHaveBeenCalled();
   vi.setSystemTime(new Date("2026-09-22T10:00:00Z"));
-  await startCheckout();expect(m.customer).toHaveBeenCalledOnce();expect(operation.customer_started_at).toBe("2026-09-22T10:00:00.000Z");
+  await startCheckout("monthly");expect(m.customer).toHaveBeenCalledOnce();expect(operation.customer_started_at).toBe("2026-09-22T10:00:00.000Z");
 });
 it("retry after an ambiguous creation failure within 23 hours reuses the same key and start time",async()=>{
   vi.useFakeTimers();vi.setSystemTime(new Date("2026-09-21T10:00:00Z"));customer=null;
   m.customer.mockRejectedValueOnce(Error("response lost"));
-  await expect(startCheckout()).rejects.toThrow("response lost");
+  await expect(startCheckout("monthly")).rejects.toThrow("response lost");
   const started=operation.customer_started_at;
-  vi.setSystemTime(new Date("2026-09-22T08:00:00Z"));await startCheckout();
+  vi.setSystemTime(new Date("2026-09-22T08:00:00Z"));await startCheckout("monthly");
   expect(m.customer).toHaveBeenCalledTimes(2);expect(m.customer.mock.calls[1]).toEqual(m.customer.mock.calls[0]);
   expect(operation.customer_key).toBe("customer-key");expect(operation.customer_started_at).toBe(started);
 });
 it("failed customer_start persistence prevents any Stripe Customer creation",async()=>{
   customer=null;m.operation.mockRejectedValueOnce(Error("database unavailable"));
-  await expect(startCheckout()).rejects.toThrow("database unavailable");expect(m.customer).not.toHaveBeenCalled();
+  await expect(startCheckout("monthly")).rejects.toThrow("database unavailable");expect(m.customer).not.toHaveBeenCalled();
 });
-it.each(["active","trialing","past_due","incomplete","unpaid","paused"])("existing %s subscription opens portal without another checkout",async status=>{m.list.mockResolvedValue({data:[subscription(status)],has_more:false});expect(await startCheckout()).toContain("billing.stripe.com");expect(m.checkout).not.toHaveBeenCalled();});
-it("two sequential clicks reuse the same open hosted session",async()=>{operation.checkout_session_id="cs_old";m.session.mockResolvedValue({customer:"cus_own",status:"open",url:"https://checkout.stripe.com/c/pay/old"});expect(await startCheckout()).toContain("/old");expect(m.checkout).not.toHaveBeenCalled();});
-it("completed checkout awaiting subscription stays pending without granting or creating anything",async()=>{operation.checkout_session_id="cs_old";m.session.mockResolvedValue({customer:"cus_own",status:"complete"});expect(await startCheckout()).toBe("https://servicebok.example/account?checkout=success");expect(m.checkout).not.toHaveBeenCalled();expect(m.apply).not.toHaveBeenCalled();});
-it("a canceled subscription can upgrade again after an earlier completed checkout",async()=>{operation.checkout_session_id="cs_old";m.session.mockResolvedValue({customer:"cus_own",status:"complete"});m.list.mockResolvedValue({data:[subscription("canceled")],has_more:false});await startCheckout();expect(m.checkout).toHaveBeenCalledOnce();});
-it("lost session response retries identical saved parameters and key",async()=>{Object.assign(operation,{checkout_key:"old-key",checkout_expires_at:Math.floor(Date.now()/1000)+1000,checkout_price_id:"price_monthly",checkout_origin:"https://servicebok.example"});await startCheckout();expect(m.operation).not.toHaveBeenCalledWith(user,"lease","checkout",expect.anything());expect(m.checkout.mock.calls[0][1]).toEqual({idempotencyKey:"servicebok-checkout:old-key"});});
+it.each(["active","trialing","past_due","incomplete","unpaid","paused"])("existing %s subscription opens portal without another checkout",async status=>{m.list.mockResolvedValue({data:[subscription(status)],has_more:false});expect(await startCheckout("monthly")).toContain("billing.stripe.com");expect(m.checkout).not.toHaveBeenCalled();});
+it("two sequential clicks reuse the same open hosted session",async()=>{operation.checkout_session_id="cs_old";operation.checkout_price_id="price_monthly";m.session.mockResolvedValue({id:"cs_old",customer:"cus_own",status:"open",url:"https://checkout.stripe.com/c/pay/old"});expect(await startCheckout("monthly")).toContain("/old");expect(m.checkout).not.toHaveBeenCalled();});
+it("completed checkout awaiting subscription stays pending without granting or creating anything",async()=>{operation.checkout_session_id="cs_old";m.session.mockResolvedValue({customer:"cus_own",status:"complete"});expect(await startCheckout("monthly")).toBe("https://servicebok.example/account?checkout=success");expect(m.checkout).not.toHaveBeenCalled();expect(m.apply).not.toHaveBeenCalled();});
+it("a canceled subscription can upgrade again after an earlier completed checkout",async()=>{operation.checkout_session_id="cs_old";m.session.mockResolvedValue({customer:"cus_own",status:"complete"});m.list.mockResolvedValue({data:[subscription("canceled")],has_more:false});await startCheckout("monthly");expect(m.checkout).toHaveBeenCalledOnce();});
+it("lost session response retries identical saved parameters and key",async()=>{Object.assign(operation,{checkout_key:"old-key",checkout_expires_at:Math.floor(Date.now()/1000)+1000,checkout_price_id:"price_monthly",checkout_origin:"https://servicebok.example"});await startCheckout("monthly");expect(m.operation).not.toHaveBeenCalledWith(user,"lease","checkout",expect.anything());expect(m.checkout.mock.calls[0][1]).toEqual({idempotencyKey:"servicebok-checkout:old-key"});});
 it("portal uses only own customer and fixed return URL",async()=>{await startPortal();expect(m.portal).toHaveBeenCalledExactlyOnceWith({customer:"cus_own",return_url:"https://servicebok.example/account"});});
 it("portal without customer fails without a Stripe call",async()=>{customer=null;await expect(startPortal()).rejects.toThrow("No billing customer");expect(m.portal).not.toHaveBeenCalled();});
 it("client supplied customer, price and return URL are ignored and errors remain generic",async()=>{
   m.checkout.mockRejectedValue(Error("sk_secret raw Stripe failure"));
-  const form=new FormData();form.set("price","attacker_price");form.set("customer","cus_victim");form.set("return_url","https://evil.example");
+  const form=new FormData();form.set("plan","monthly");form.set("price","attacker_price");form.set("customer","cus_victim");form.set("return_url","https://evil.example");
   const invoke=upgradeAccount as unknown as (state:unknown,form:FormData)=>Promise<{message:string}>;
   expect(await invoke({},form)).toEqual({message:"Betalningen kunde inte startas. Försök igen."});
   expect(m.checkout.mock.calls[0][0]).toMatchObject({customer:"cus_own",line_items:[{price:"price_monthly",quantity:1}]});
 });
 it.each(["active","trialing","past_due","canceled","unpaid","incomplete","incomplete_expired","paused"])("webhook preserves explicitly mapped %s status",async status=>{m.retrieve.mockResolvedValue(subscription(status));await processBillingEvent(event());expect(m.apply.mock.calls[0][3]).toMatchObject({status,price_matches:true});});
 it("unknown price does not qualify for Premium",()=>{expect(subscriptionState(subscription("active","price_other"),user,"cus_own").price_matches).toBe(false);});
-it("yearly prices and multi-item subscriptions fail closed",()=>{const yearly=subscription();yearly.items.data[0].price.recurring!.interval="year";expect(subscriptionState(yearly,user,"cus_own").price_matches).toBe(false);const multiple=subscription();multiple.items.data.push(multiple.items.data[0]);expect(subscriptionState(multiple,user,"cus_own").price_matches).toBe(false);});
+it("monthly price with yearly interval and multi-item subscriptions fail closed",()=>{const yearly=subscription();yearly.items.data[0].price.recurring!.interval="year";expect(subscriptionState(yearly,user,"cus_own").price_matches).toBe(false);const multiple=subscription();multiple.items.data.push(multiple.items.data[0]);expect(subscriptionState(multiple,user,"cus_own").price_matches).toBe(false);});
 it("unknown status fails closed",()=>{expect(subscriptionState(subscription("future_status"),user,"cus_own").status).toBe("inactive");});
 it("wrong customer or metadata cannot confer entitlement",async()=>{m.retrieve.mockResolvedValue({...subscription(),customer:"cus_victim"});await expect(processBillingEvent(event())).rejects.toThrow("Customer mismatch");expect(m.apply).not.toHaveBeenCalled();expect(()=>subscriptionState({...subscription(),metadata:{user_id:"victim"}},user,"cus_own")).toThrow();});
 it("unmapped Stripe customer is ignored without provisioning an account",async()=>{m.find.mockResolvedValue(null);await processBillingEvent(event());expect(m.lease).not.toHaveBeenCalled();expect(m.apply).not.toHaveBeenCalled();});
@@ -82,3 +83,67 @@ it("valid raw-body signature is accepted; altered payload and missing signatures
   expect((await send(payload+" ",signature)).status).toBe(400);expect((await send(payload,"")).status).toBe(400);expect(m.apply).not.toHaveBeenCalled();
 });
 it("transient processing failure requests Stripe retry without leaking details",async()=>{m.retrieve.mockRejectedValue(Error("private"));const payload=JSON.stringify(event()),signature=new Stripe("sk_test_fixture").webhooks.generateTestHeaderString({payload,secret:"whsec_fixture"});const response=await POST(new Request("http://localhost/api/stripe/webhook",{method:"POST",body:payload,headers:{"stripe-signature":signature}}));expect(response.status).toBe(500);expect(await response.text()).not.toContain("private");});
+
+it("yearly Checkout uses only the configured yearly price",async()=>{
+  await startCheckout("yearly");
+  expect(m.operation).toHaveBeenCalledWith(user,"lease","checkout",{price:"price_yearly",origin:"https://servicebok.example"});
+  expect(m.checkout.mock.calls[0][0].line_items).toEqual([{price:"price_yearly",quantity:1}]);
+});
+it.each([undefined,null,"price_injected","MONTHLY","weekly",{plan:"yearly"}])("rejects invalid plan %j before lease or Stripe",async plan=>{
+  await expect(startCheckout(plan)).rejects.toThrow("Invalid billing plan");
+  expect(m.lease).not.toHaveBeenCalled();expect(m.checkout).not.toHaveBeenCalled();
+});
+it("yearly server action ignores injected Price ID and return URL",async()=>{
+  m.checkout.mockRejectedValue(Error("private"));
+  const form=new FormData();form.set("plan","yearly");form.set("price","price_injected");form.set("return_url","https://evil.example");
+  await upgradeAccount({message:""},form);
+  expect(m.checkout.mock.calls[0][0]).toMatchObject({line_items:[{price:"price_yearly",quantity:1}],success_url:"https://servicebok.example/account?checkout=success"});
+});
+it("server action rejects a Price ID masquerading as plan",async()=>{
+  const form=new FormData();form.set("plan","price_injected");
+  expect(await upgradeAccount({message:""},form)).toEqual({message:"Betalningen kunde inte startas. Försök igen."});
+  expect(m.lease).not.toHaveBeenCalled();
+});
+it.each([
+  ["price_monthly","month",1,true], ["price_yearly","year",1,true],
+  ["price_other","year",1,false], ["price_other","month",1,false],
+  ["price_monthly","year",1,false], ["price_yearly","month",1,false],
+  ["price_monthly","month",2,false], ["price_yearly","year",2,false],
+] as const)("validates price %s interval %s count %i → %s",(price,interval,count,expected)=>{
+  const value=subscription("active",price);value.items.data[0].price.recurring!.interval=interval;value.items.data[0].price.recurring!.interval_count=count;
+  expect(subscriptionState(value,user,"cus_own").price_matches).toBe(expected);
+});
+it.each(["active","trialing","past_due"])("yearly webhook retains authoritative %s status and period",async status=>{
+  const value=subscription(status,"price_yearly");value.items.data[0].price.recurring!.interval="year";m.retrieve.mockResolvedValue(value);
+  await processBillingEvent(event());expect(m.apply.mock.calls[0][3]).toMatchObject({status,price_matches:true,period_end:"2100-01-01T00:00:00.000Z"});
+  expect(m.lease.mock.invocationCallOrder[0]).toBeLessThan(m.retrieve.mock.invocationCallOrder[0]);
+});
+function pendingMonthly() {
+  Object.assign(operation,{checkout_key:"old-key",checkout_expires_at:Math.floor(Date.now()/1000)+1000,checkout_price_id:"price_monthly",checkout_origin:"https://servicebok.example",checkout_session_id:"cs_old"});
+  m.session.mockResolvedValue({id:"cs_old",customer:"cus_own",status:"open",url:"https://checkout.stripe.com/c/pay/old"});
+}
+it("switching plans expires old session before allocating new operation and price",async()=>{
+  pendingMonthly();await startCheckout("yearly");
+  expect(m.expire).toHaveBeenCalledWith("cs_old");
+  expect(m.expire.mock.invocationCallOrder[0]).toBeLessThan(m.operation.mock.invocationCallOrder[0]);
+  expect(m.checkout.mock.calls[0][0].line_items).toEqual([{price:"price_yearly",quantity:1}]);
+  expect(m.checkout.mock.calls[0][1]).toEqual({idempotencyKey:"servicebok-checkout:attempt-key"});
+});
+it("failed expiration never starts a competing checkout",async()=>{
+  pendingMonthly();m.expire.mockRejectedValue(Error("payment race or unavailable"));
+  await expect(startCheckout("yearly")).rejects.toThrow();expect(m.operation).not.toHaveBeenCalled();expect(m.checkout).not.toHaveBeenCalled();
+});
+it("lost Checkout response recovers original parameters before changing plan",async()=>{
+  pendingMonthly();operation.checkout_session_id=null;
+  await startCheckout("yearly");
+  expect(m.checkout.mock.calls[0][0].line_items).toEqual([{price:"price_monthly",quantity:1}]);
+  expect(m.checkout.mock.calls[0][1]).toEqual({idempotencyKey:"servicebok-checkout:old-key"});
+  expect(m.expire).toHaveBeenCalledWith("cs_test");
+  expect(m.checkout.mock.calls[1][0].line_items).toEqual([{price:"price_yearly",quantity:1}]);
+  expect(m.checkout.mock.calls[1][1]).toEqual({idempotencyKey:"servicebok-checkout:attempt-key"});
+});
+it("completed old Checkout does not start a new plan while awaiting webhook",async()=>{
+  pendingMonthly();m.session.mockResolvedValue({id:"cs_old",customer:"cus_own",status:"complete"});
+  expect(await startCheckout("yearly")).toContain("checkout=success");
+  expect(m.expire).not.toHaveBeenCalled();expect(m.checkout).not.toHaveBeenCalled();
+});
