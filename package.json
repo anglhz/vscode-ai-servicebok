@@ -12,7 +12,8 @@
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint . --max-warnings=0",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:config": "node scripts/check-config.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",

@@ -62,6 +62,12 @@ after(async () => {
   await admin.end();
 });
 
+test("fresh migration chain satisfies read-only schema/security audit", async () => {
+  const results=await db.query(readFileSync(new URL('../supabase/verification.sql',import.meta.url),'utf8'));
+  const summary=results.find(result=>result.rows?.[0]?.postgres_version)?.rows[0];
+  assert.ok(summary);console.log('Schema audit:',JSON.stringify(summary));
+});
+
 test("concurrent Free vehicle creation serializes account allowance and creates exactly one vehicle", async () => {
   const user=randomUUID();await db.query("insert into auth.users values($1)",[user]);
   const first=await connect(user),second=await connect(user);
