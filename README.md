@@ -14,7 +14,9 @@ npm ci
 Kopiera `.env.example` till `.env.local` (PowerShell: `Copy-Item .env.example .env.local`).
 Ange servervariabeln `APP_URL=http://localhost:3000` samt
 `NEXT_PUBLIC_SUPABASE_URL` och `NEXT_PUBLIC_SUPABASE_ANON_KEY` från ett
-Supabase-utvecklingsprojekt. Lämna `SUPABASE_SERVICE_ROLE_KEY` tom; den används inte.
+Supabase-utvecklingsprojekt. Billing kräver även servervariabeln
+`SUPABASE_SERVICE_ROLE_KEY` och de tre Stripe-variablerna i `.env.example`.
+Service role får aldrig exponeras för webbläsaren.
 
 Applicera migrationerna i en utvecklingsmiljö före signup och fordonsregistrering. Lokal Supabase kräver Docker
 Desktop med Linux-motorn igång. Vid första installationen:
@@ -162,7 +164,8 @@ Fordonslistan, manuell registrering och fordonsprofil använder lagrad data.
 Dashboard visar senast skapade aktiva fordon eller en action för att lägga till ett.
 Globala Ny leder till en ny servicehändelse eller ett fordonsval. Fordonsprofilen
 visar servicehistorik med skapa, redigera och soft delete, samt privata dokument.
-Ingen Stripe, PDF-export, externa fordons-API:er eller AI ingår.
+Projektet innehåller nu även dokument, valfri fordonslookup, serviceplan,
+ägarbyte, PDF-export och Stripe Billing. AI ingår inte.
 Theme i app/globals.css, spacing med 4 px-bas, sidebar från 768 px.
 Laddningsindikering är lokal på submitknappen.
 
@@ -1107,3 +1110,26 @@ webhooks; denna V1 har ingen separat schemalagd reconciliation-worker.
 - [Signerad uppladdning och tokenlivslängd](https://supabase.com/docs/reference/javascript/file-buckets-createsigneduploadurl)
 - [Signerad nedladdning](https://supabase.com/docs/reference/javascript/file-buckets-createsignedurl)
 - [Storage RLS och operationskontroller](https://supabase.com/docs/guides/storage/schema/helper-functions)
+
+## Preview/staging och release
+
+Följ [STAGING.md](STAGING.md) för miljövariabler, stabil Vercel-preview,
+Auth-redirects, hela migrationskedjan och Stripe testläge.
+[Smoke-testprotokollet](docs/SMOKE_TEST.md) täcker A/B/C och direkta API-anrop.
+[Verifieringsrapporten](docs/INTEGRATION_REPORT.md) skiljer lokal evidens från
+hosted tester som återstår. Använd [releasechecklistan](PRODUCTION_CHECKLIST.md)
+före public launch; en lokal grön testsvit ersätter inte hosted verifiering.
+
+Med Node 24 kan konfiguration kontrolleras utan nätverksanrop:
+
+```sh
+node --env-file=.env.staging.local scripts/check-config.mjs --staging
+```
+
+Kommandot visar endast variabelnamn/felkategorier, aldrig värden. Det verifierar
+format och fullständig featurekonfiguration, inte att nycklarna fungerar.
+Billing stoppar före Stripe-anrop om någon nödvändig variabel saknas. Delvis
+konfigurerad lookup ger en säker driftvarning och behåller manuell registrering.
+Preview/production i Vercel kräver HTTPS även om APP_URL råkar ange localhost.
+Webhooks loggar endast utfall och tillåtna event-ID/typer; `processed` inkluderar
+ignorerade/dubbla event och är inte ett bevis på Premium-aktivering.

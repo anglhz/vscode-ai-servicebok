@@ -8,3 +8,9 @@ coverage/
 next-env.d.ts
 .vercel/
 *.log
+test-results/
+playwright-report/
+output/
+.stripe/
+supabase/.temp/
+supabase/.branches/
