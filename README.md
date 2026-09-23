@@ -1144,3 +1144,18 @@ konfigurerad lookup ger en säker driftvarning och behåller manuell registrerin
 Preview/production i Vercel kräver HTTPS även om APP_URL råkar ange localhost.
 Webhooks loggar endast utfall och tillåtna event-ID/typer; `processed` inkluderar
 ignorerade/dubbla event och är inte ett bevis på Premium-aktivering.
+
+### Schemalagd uppsägning från Customer Portal
+
+I den aktuella Stripe-API-versionen kan Portal representera uppsägning vid
+periodslut genom `cancel_at`, även när `cancel_at_period_end=false`. Webhooken
+normaliserar vår befintliga boolean till true för Stripes explicita flagga, eller
+för active/trialing med `ended_at=null` och ett giltigt Unix-tidsvärde i `cancel_at`
+som exakt matchar samma items `current_period_end` som sparas i state. Andra datum
+eller avslutade abonnemang tolkas inte som planerad uppsägning via `cancel_at`.
+Befintligt UI visar då ”Uppsägning planerad till …”. Ingen migration krävs.
+
+Redan behandlade event-ID:n hoppas fortfarande över. En resend av ett tidigare
+behandlat event reparerar därför inte äldre state; nästa nya relevanta Stripe-event
+hämtar och normaliserar aktuell subscription. Ingen idempotency-state ska raderas
+för att kringgå detta.

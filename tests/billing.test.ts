@@ -147,3 +147,52 @@ it("completed old Checkout does not start a new plan while awaiting webhook",asy
   expect(await startCheckout("yearly")).toContain("checkout=success");
   expect(m.expire).not.toHaveBeenCalled();expect(m.checkout).not.toHaveBeenCalled();
 });
+
+it.each([
+  {name:"explicit Stripe flag",flag:true,status:"active",ended:null,cancel:null,expected:true},
+  {name:"active cancel_at equals period end",flag:false,status:"active",ended:null,cancel:4102444800,expected:true},
+  {name:"trialing cancel_at equals period end",flag:false,status:"trialing",ended:null,cancel:4102444800,expected:true},
+  {name:"cancel_at one second after period",flag:false,status:"active",ended:null,cancel:4102444801,expected:false},
+  {name:"cancel_at one second before period",flag:false,status:"active",ended:null,cancel:4102444799,expected:false},
+  {name:"canceled subscription",flag:false,status:"canceled",ended:null,cancel:4102444800,expected:false},
+  {name:"ended subscription",flag:false,status:"active",ended:4102444700,cancel:4102444800,expected:false},
+  {name:"past due subscription",flag:false,status:"past_due",ended:null,cancel:4102444800,expected:false},
+  {name:"missing cancel_at",flag:false,status:"active",ended:null,cancel:undefined,expected:false},
+  {name:"null cancel_at",flag:false,status:"active",ended:null,cancel:null,expected:false},
+  {name:"explicit flag remains authoritative when ended",flag:true,status:"canceled",ended:4102444700,cancel:null,expected:true},
+])("normalizes cancellation: $name",({flag,status,ended,cancel,expected})=>{
+  const value={...subscription(status),cancel_at_period_end:flag,ended_at:ended,cancel_at:cancel} as Stripe.Subscription;
+  const state=subscriptionState(value,user,"cus_own");
+  expect(state.cancel_at_period_end).toBe(expected);
+  expect(state.period_end).toBe("2100-01-01T00:00:00.000Z");
+});
+it("does not infer cancellation without a numeric item period end",()=>{
+  const value={...subscription(),ended_at:null,cancel_at:4102444800};value.items.data=[];
+  expect(subscriptionState(value,user,"cus_own")).toMatchObject({cancel_at_period_end:false,period_end:null,price_matches:false});
+});
+it("does not infer cancellation from non-finite matching timestamps",()=>{
+  const value={...subscription(),ended_at:null,cancel_at:NaN};value.items.data[0].current_period_end=NaN;
+  expect(subscriptionState(value,user,"cus_own").cancel_at_period_end).toBe(false);
+});
+it.each(["price_monthly","price_yearly"])("syncs scheduled cancellation for %s after lease and skips duplicate resend",async price=>{
+  const current={...subscription("active",price),ended_at:null,cancel_at:4102444800};
+  current.items.data[0].price.recurring!.interval=price==="price_yearly"?"year":"month";
+  m.retrieve.mockResolvedValue(current);m.processed.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  const notification=event();await processBillingEvent(notification);await processBillingEvent(notification);
+  expect(m.apply).toHaveBeenCalledOnce();expect(m.retrieve).toHaveBeenCalledOnce();
+  expect(m.apply.mock.calls[0][3]).toMatchObject({cancel_at_period_end:true,price_matches:true,status:"active",period_end:"2100-01-01T00:00:00.000Z"});
+  expect(m.lease.mock.invocationCallOrder[0]).toBeLessThan(m.retrieve.mock.invocationCallOrder[0]);
+});
+it("retry after failed persistence reapplies the same normalized cancellation",async()=>{
+  m.retrieve.mockResolvedValue({...subscription(),ended_at:null,cancel_at:4102444800});
+  m.apply.mockRejectedValueOnce(Error("temporary failure")).mockResolvedValueOnce(undefined);
+  const notification=event();await expect(processBillingEvent(notification)).rejects.toThrow("temporary failure");
+  await processBillingEvent(notification);
+  expect(m.apply).toHaveBeenCalledTimes(2);expect(m.apply.mock.calls[1][3]).toEqual(m.apply.mock.calls[0][3]);
+  expect(m.apply.mock.calls[1][3].cancel_at_period_end).toBe(true);
+});
+it("an older cancellation notification uses current Stripe state when cancellation was undone",async()=>{
+  m.retrieve.mockResolvedValue({...subscription(),ended_at:null,cancel_at:null});
+  await processBillingEvent(event("customer.subscription.updated",{...subscription(),ended_at:null,cancel_at:4102444800}));
+  expect(m.apply.mock.calls[0][3].cancel_at_period_end).toBe(false);
+});
