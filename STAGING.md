@@ -17,6 +17,7 @@ byggs in i klienten: ändring kräver nytt bygge. Övriga variabler är server-o
 | NEXT_PUBLIC_SUPABASE_URL | Required | Public | Dedikerat testprojekt | Separat produktionsprojekt |
 | NEXT_PUBLIC_SUPABASE_ANON_KEY | Required | Public, anon/publishable | Samma testprojekt som URL | Samma produktionsprojekt som URL; aldrig service role |
 | SUPABASE_SERVICE_ROLE_KEY | Required för distribuerad limiter, transfer preview/accept och Billing | Server secret | Endast testprojekt | Endast produktionsprojekt |
+| CRON_SECRET | Server-only, minst 32 slumpbytes, för dokumentstädning | Lokal testsecret | Separat stagingsecret i server och scheduler | Separat produktionssecret |
 | STRIPE_SECRET_KEY | Required för Billing | Server secret | sk_test/rk_test; live nekas i Vercel Preview | Avsedd separat livekonfiguration efter releasegodkännande |
 | STRIPE_WEBHOOK_SECRET | Required för Billing | Server secret | Stagingendpointens whsec; CLI har eget secret | Produktionsendpointens eget secret |
 | STRIPE_PREMIUM_MONTHLY_PRICE_ID | Required för Billing | Server | Testpris 39 SEK, month/1, antal 1 | Eget livepris 39 SEK/månad |
@@ -93,6 +94,7 @@ Ordning, utan manuella mellansteg:
 9. 20260921000900_subscriptions
 10. 20260924001000_delete_empty_vehicle
 11. 20260924001100_distributed_rate_limits
+12. 20260924001200_document_retention_cleanup
 
 Migration 11 stänger direkt klientexecute på transfer preview/accept. Deploya
 migration och kompatibel serverkod samordnat i staging; äldre serverkod kan inte
@@ -180,3 +182,83 @@ Verifiera både månads- och års-Checkout → webhook → Premium, samt Portal,
 cancel/success, dubbla klick och byte av val efter avbruten Checkout. Kontrollera
 att Stripe visar samma belopp/valuta som Konto före bekräftelse. Befintliga
 subscriptions hanteras fortsatt i Portal. Ingen databasändring krävs.
+
+## Schemalagd dokumentstädning (migration 12)
+
+Det finns en POST-endpoint, men **inget aktivt schema skapas av denna PR**.
+[Vercel Cron](https://vercel.com/docs/cron-jobs) anropar GET på production och kan
+inte direkt användas för den här avsiktligt POST-only-routen. Använd en betrodd
+extern HTTP-scheduler med följande exakta inställningar:
+
+| Inställning | Värde |
+| --- | --- |
+| Schema | `0 * * * *`, UTC, en gång i timmen |
+| Metod | POST |
+| URL | Miljöns fasta HTTPS-origin + `/api/internal/document-cleanup` |
+| Header | `Authorization: Bearer <CRON_SECRET>` från scheduler-secretlagring |
+| Body | Tom |
+| Timeout | 60 sekunder |
+| Redirects | Följ inte redirects; ange korrekt slutlig domän |
+| Automatisk retry | Nästa timkörning; vid manuell retry vänta minst fem minuter |
+
+Använd separat stagingprojekt, domän, service role och CRON_SECRET. Generera
+minst 32 slumpbytes, exempelvis base64-kodade; lagra värdet i Vercels servermiljö
+och scheduler-secretlagring. Inga secrets i querystring/Git. Stäng av request/header-
+och rå felloggning. Kontrollera åtkomst genom eventuell Deployment Protection
+utan att öppna övrig staging; dess separata scheduleråtkomst ersätter inte CRON_SECRET.
+Aktivera schemat först efter migration, deployment och godkänt test nedan. Verifiera
+i schedulerhistoriken att faktiska timkörningar sker; markera dem inte som aktiva
+enbart för att endpointen finns. Lokal testmiljö kräver manuell trigger.
+
+Manuell POST från PowerShell, där miljövariabler redan tillförts säkert:
+
+```powershell
+try {
+  Invoke-RestMethod -Method Post -Uri ($env:APP_URL.TrimEnd('/') + '/api/internal/document-cleanup') `
+    -Headers @{ Authorization = 'Bearer ' + $env:CRON_SECRET } -TimeoutSec 60
+} catch {
+  Write-Output 'Cleanup-anrop misslyckades. Kontrollera status i säkra driftloggar.'
+}
+```
+
+Kör inte med transcript/debug/header-dump. Endpointen ger endast status och
+claimed/deleted/failed; enskilda fel ger `partial`, backendfel 503, fel auth 401.
+Loggkategorin `document_cleanup` innehåller samma säkra summering. Larma på utebliven
+körning, failed > 0 och upprepade claimed=50. Kapacitet är högst 50 dokument/timme
+med detta schema, inte obegränsad ködränering. Permanenta fel kräver driftåtgärd;
+upprepade fulla felbatcher kan annars fördröja senare kandidater.
+
+### Hosted test med enbart syntetiska data
+
+1. Applicera migration 12 i det isolerade testprojektet, kör verification.sql
+   och `npm run check:config -- --staging`. Åtkomstkontrollen ska neka anon och
+   authenticated direkt execute på båda cleanup-RPC:erna. service_role ska tillåtas.
+2. Skapa två små syntetiska PDF-dokument via ordinarie serverflöde. För det ena:
+   reservera metadata och gör signed upload, men utelämna finalize. För det andra:
+   slutför uppladdningen normalt till ready. Använd inga riktiga personuppgifter.
+3. Åldra endast den syntetiska pending-raden i SQL Editor, med dess tillfälliga ID:
+   `update public.documents set created_at=now()-interval '4 hours' where id='<synthetic-document-uuid>' and upload_status='pending';`
+   Detta kringgår avsiktligt tidsmarginalen i testet: behåll inte och återanvänd inte
+   den nya upload-token. Använd aldrig denna åldring på riktiga dokument.
+4. Kör POST med korrekt secret. Kontrollera via Storage och SQL Editor att det
+   syntetiska pending-objektet är borta, deleted_at och storage_deleted_at är satta,
+   men documents-raden finns kvar. Ready-dokumentets bytes och metadata ska vara
+   oförändrade. Kontrollera även ett färskt pending (<3h): det ska lämnas kvar.
+5. Upprepa med ett syntetiskt redan soft-deleted objekt äldre än tre timmar och
+   med ett redan saknat objekt: båda ska kunna få storage_deleted_at. Radera aldrig
+   storage.objects med SQL för att simulera fysisk radering; använd Storage API.
+6. Kör igen: färdigstädade dokument ska inte återkomma. Kör två POST samtidigt:
+   inga dubbla claims; avbruten worker ska kunna återtas efter fem minuter.
+   Kontrollera också att vanligt användar-delete/cleanup fortfarande fungerar.
+7. Kör utan och med fel Authorization: 401, ingen kandidat behandlas. GET ska
+   ge 405. Body med egna IDs/limit ska inte styra urval. Svaren och driftloggarna
+   får inte innehålla paths, filnamn, identiteter, tokens eller råa SDK-fel.
+8. Verifiera efter en syntetisk transfer utan dokumentval att ett ready-dokument
+   med deleted_at null finns kvar. Det är inte en cleanup-kandidat bara för att
+   båda ägarna saknar åtkomst. Separat retention-/administrativ policy återstår.
+
+Lokala PostgreSQL-tester använder ett Storage-tabellkontrakt, ingen hosted Storage-
+server. Stegen ovan måste därför verifieras efter separat godkänd stagingdeployment.
+DB-metadata behålls; Storage-bytes raderas. Databasbackup innehåller inte bytes:
+planera separat Storage-backup/restore. Pausa schemat vid incident; kodrollback
+eller DB-restore återställer inte redan raderade filer.

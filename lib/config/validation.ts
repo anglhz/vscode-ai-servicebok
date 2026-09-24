@@ -1,7 +1,7 @@
 // Pure validation shared by feature boundaries and the local readiness command.
 // Only fixed variable names/reasons leave this module, never supplied values.
 type Environment = Record<string, string | undefined>;
-export type ConfigFeature = "app" | "supabase" | "billing" | "lookup";
+export type ConfigFeature = "app" | "supabase" | "billing" | "lookup" | "cleanup";
 export function configurationIssues(feature: ConfigFeature, env: Environment): string[] {
   const issues: string[] = [];
   const required = (name: string) => {
@@ -17,6 +17,10 @@ export function configurationIssues(feature: ConfigFeature, env: Environment): s
         parsed.username || parsed.password || parsed.search || parsed.hash || (originOnly && parsed.pathname !== "/")) throw new Error();
     } catch { issues.push(`${name}: valid HTTPS ${originOnly ? "origin" : "URL"} required (local HTTP only outside Vercel)`); }
   };
+  if (feature === "cleanup") {
+    required("CRON_SECRET"); required("SUPABASE_SERVICE_ROLE_KEY");
+    if ((env.CRON_SECRET ?? "").length < 32) issues.push("CRON_SECRET: at least 32 characters required (generate 32 random bytes)");
+  }
   if (feature === "app") url("APP_URL", true);
   if (feature === "supabase") {
     url("NEXT_PUBLIC_SUPABASE_URL", true); required("NEXT_PUBLIC_SUPABASE_ANON_KEY");

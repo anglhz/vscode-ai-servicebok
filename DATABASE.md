@@ -1334,3 +1334,36 @@ Preview/accept för transfers förlorar klientexecute och får server-only wrapp
 som använder verifierat user-id. Kärnlogik, ägarlås och capability-kontroller
 behålls. Appen committar limiteranropet separat före transfer så misslyckade
 acceptförsök inte återställer budgeten. Scopes och driftkrav finns i README.
+
+## Dokumentretention och global driftstädning
+
+Migration `20260924001200_document_retention_cleanup.sql` återanvänder documents
+created_at/upload_status/deleted_at/storage_deleted_at/storage_path. Kandidater:
+äldre än tre timmar, ingen storage_deleted_at, och antingen pending eller redan
+soft-deleted. Pending markeras deleted atomiskt med claim. Ready + deleted_at null
+är aldrig kandidat, även efter transfer utan dokumentgrant. Ägarbyte är ingen
+raderingsregel; ej överförda otillgängliga dokument kräver separat framtida policy.
+Oavslutade pending-uploadreservationer följer den befintliga tretimmarsregeln.
+
+`private.document_cleanup_claims` innehåller bara document_id (PK/FK RESTRICT),
+slumpmässig lease_token och expires_at. Tabellen har RLS och inga direkta grants,
+inte ens till service_role. Beständig state behövs eftersom Storage API ligger
+utanför SQL-transaktionen. `claim_document_cleanup_batch(integer)` låser dokument
+med SKIP LOCKED och skapar/ersätter bara utgångna femminutersleases. Konfliktvillkoret
+kontrolleras igen under unikt radlås, även för commits efter SELECT-snapshoten.
+Ett partiellt index på (created_at,id) begränsar sökning till möjliga kandidater.
+RPC accepterar 1–100; servern väljer alltid 50.
+
+`complete_document_retention_cleanup(uuid,uuid)` låser dokumentet, kräver deleted,
+säkert gammal reservation, aktuell oexpired token och att Storage-objektet saknas.
+Den sätter storage_deleted_at och tar bort teknisk claimstate; upprepad completion
+är idempotent. Redan slutförd användarcleanup godtas utan ny metadataändring.
+Båda RPC:erna är SECURITY DEFINER med tom search_path och service_role-only EXECUTE.
+auth.uid är inte auktoritet. Inga användar-RPC:er, grants eller Storage-policies ändras.
+
+Bytes raderas genom Storage API, aldrig genom SQL DELETE i storage.objects.
+Documents-raden och historiska kopplingar behålls även efter lyckad cleanup;
+visibility_scope, ownership och quota_user_id ändras inte. Metadata har ingen
+automatisk permanent radering i V1. Dokumentmetadata blockerar fortsatt funktionen
+för radering av ett felregistrerat fordon. DB-backup och Storage-backup är separata;
+DB-backup ensam återställer inte borttagna bytes.

@@ -67,6 +67,55 @@ after(async () => {
   await admin.end();
 });
 
+test("cleanup workers skip locked rows and respect committed leases, expiry and fencing", async () => {
+  const owner = await connect(a), first = await connect(), second = await connect();
+  const vehicle = (await owner.query("select create_vehicle('car','Cleanup','Concurrency') as id")).rows[0].id;
+  for (let n = 0; n < 3; n++) await owner.query("select * from create_document($1,'fixture.pdf','application/pdf',100,'receipt')", [vehicle]);
+  await db.query("update documents set created_at=now()-interval '4 hours' where vehicle_id=$1", [vehicle]);
+  await first.query("set role service_role"); await second.query("set role service_role");
+  await first.query("begin");
+  const one = (await first.query("select * from claim_document_cleanup_batch(1)")).rows[0];
+  const two = (await second.query("select * from claim_document_cleanup_batch(1)")).rows[0];
+  assert.notEqual(one.id, two.id); // Returns while the first row lock is held.
+  await first.query("commit");
+  const three = (await second.query("select * from claim_document_cleanup_batch(10)")).rows;
+  assert.equal(three.length, 1); assert.equal(new Set([one.id, two.id, three[0].id]).size, 3);
+  assert.deepEqual((await first.query("select * from claim_document_cleanup_batch(10)")).rows, []);
+  await db.query("update private.document_cleanup_claims set expires_at=now()-interval '1 second' where document_id=$1", [one.id]);
+  const retry = (await second.query("select * from claim_document_cleanup_batch(1)")).rows[0];
+  assert.equal(retry.id, one.id); assert.notEqual(retry.lease_token, one.lease_token);
+  assert.equal((await first.query("select complete_document_retention_cleanup($1,$2) as done", [one.id, one.lease_token])).rows[0].done, false);
+  for (const lease of [retry, two, three[0]]) assert.equal((await second.query("select complete_document_retention_cleanup($1,$2) as done", [lease.id, lease.lease_token])).rows[0].done, true);
+});
+
+test("rolled back cleanup claims leave candidates available to another worker", async () => {
+  const owner = await connect(a), first = await connect(), second = await connect();
+  const vehicle = (await owner.query("select create_vehicle('car','Cleanup','Rollback') as id")).rows[0].id;
+  const doc = (await owner.query("select * from create_document($1,'fixture.pdf','application/pdf',100,'receipt')", [vehicle])).rows[0];
+  await db.query("update documents set created_at=now()-interval '4 hours' where id=$1", [doc.id]);
+  await first.query("set role service_role"); await second.query("set role service_role");
+  await first.query("begin"); await first.query("select * from claim_document_cleanup_batch(1)");
+  assert.deepEqual((await second.query("select * from claim_document_cleanup_batch(1)")).rows, []);
+  await first.query("rollback");
+  const retry = (await second.query("select * from claim_document_cleanup_batch(1)")).rows[0];
+  assert.equal(retry.id, doc.id);
+  await second.query("select complete_document_retention_cleanup($1,$2)", [retry.id, retry.lease_token]);
+});
+
+test("owner cleanup and scheduled cleanup can complete the same absent object safely", async () => {
+  const owner = await connect(a), worker = await connect();
+  const vehicle = (await owner.query("select create_vehicle('car','Cleanup','User') as id")).rows[0].id;
+  const doc = (await owner.query("select * from create_document($1,'fixture.pdf','application/pdf',100,'receipt')", [vehicle])).rows[0];
+  await db.query("update documents set created_at=now()-interval '4 hours' where id=$1", [doc.id]);
+  await worker.query("set role service_role"); await worker.query("begin");
+  const lease = (await worker.query("select * from claim_document_cleanup_batch(1)")).rows[0];
+  const pending = owner.query("select * from document_cleanup_candidates($1)", [vehicle]);
+  await assertWaiting(owner); await worker.query("commit");
+  assert.equal((await pending).rows[0].id, doc.id);
+  await owner.query("select complete_document_cleanup($1,$2)", [vehicle, doc.id]);
+  assert.equal((await worker.query("select complete_document_retention_cleanup($1,$2) as done", [lease.id, lease.lease_token])).rows[0].done, true);
+});
+
 test("fresh migration chain satisfies read-only schema/security audit", async () => {
   const results=await db.query(readFileSync(new URL('../supabase/verification.sql',import.meta.url),'utf8'));
   const summary=results.find(result=>result.rows?.[0]?.postgres_version)?.rows[0];

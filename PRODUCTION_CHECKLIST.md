@@ -8,7 +8,7 @@ Se [STAGING.md](STAGING.md) och [testprotokoll](docs/SMOKE_TEST.md).
 - [ ] Registrera commit, Node/npm/CLI/PG-version, staging-origin och separat projekt-ref.
 - [ ] Miljömatrisen är komplett; readiness-kommandot passerar utan värden i loggen.
 - [ ] Preview använder Stripe testnycklar och egen Supabase. Ingen livebetalning.
-- [ ] Alla nio migrationer på tom hostad Supabase, migration list och verification.sql PASS.
+- [ ] Alla migrationer till och med 12 på tom hostad Supabase, migration list och verification.sql PASS.
 - [ ] APP_URL/Site URL/exakt callback fungerar från stabil HTTPS-staging-origin.
 - [ ] Signup, mailbekräftelse, login, refresh, logout och skyddad route PASS.
 - [ ] A/B/C PostgREST och direkt Storage: åtkomst nekas för fel användare.
@@ -62,13 +62,18 @@ ska fortfarande beslutas och verifieras före publik lansering.
 
 ## Retention, backup och återställning
 
-- [ ] Bestäm ägare, retentiontid och rutin för soft-deleted dokument och fysiska bytes.
-  Kvotan släpper metadata direkt; fysisk lagring kan släpa efter.
-- [ ] Pending uploads räknas tills cleanup; nuvarande cleanup är användarutlöst och
-  hanterar poster äldre än tre timmar. Inaktiva konton behöver separat driftstädning.
+- [ ] Applicera migration 12 och verifiera global dokumentstädning i STAGING:s testplan.
+  Soft-deleted bytes och abandoned pending >3h städas; metadata behålls permanent i V1.
+  Kvotan släpper vid soft-delete; fysisk lagring kan släpa efter.
+- [ ] Konfigurera extern POST-scheduler varje timme och CRON_SECRET separat per miljö.
+  Inget schema aktiveras av repo-konfigurationen; Vercel Cron använder GET.
+  Verifiera fel secret, uteblivna körningar, felantal, upprepade fulla batcher och
+  fem minuters lease/retry. Namnge driftansvarig; 50 objekt/timme kan kräva fler
+  kontrollerade körningar vid backlog. Dölj Authorization och requestdata i driftloggar.
 - [ ] Privata, ej valda filer efter transfer kan sakna åtkomlig ägare men fortfarande
   belasta tidigare kvotkonto. Besluta retention och administrativ borttagning; gör
-  inte filerna publika och överför dem inte automatiskt.
+  inte filerna publika och överför dem inte automatiskt. Ready + deleted_at null
+  omfattas inte av automatisk cleanup; ägarbyte är aldrig i sig skäl att radera.
 - [ ] Behåll billing event-ID:n tillräckligt länge för återleverans/restore; radering
   kan återöppna behandlingen av gamla events. Bevara Customer-idempotency state.
 - [ ] Bestäm retention för utgångna/avbrutna transferrecords och hashcapabilities.
