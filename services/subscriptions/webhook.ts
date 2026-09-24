@@ -8,6 +8,13 @@ export function subscriptionState(subscription: Stripe.Subscription, userId: str
   if (id(subscription.customer) !== customer || (subscription.metadata.user_id && subscription.metadata.user_id !== userId)) throw new Error("Customer mismatch");
   const statuses = ["active", "trialing", "past_due", "canceled", "unpaid", "incomplete", "incomplete_expired", "paused"];
   const item = subscription.items.data[0];
+  const periodEnd = item?.current_period_end ?? null;
+  const cancelAt = subscription.cancel_at;
+  // Portal may schedule cancellation at the item period end without setting the flag.
+  const scheduledAtPeriodEnd = subscription.cancel_at_period_end === true || (
+    (subscription.status === "active" || subscription.status === "trialing") && subscription.ended_at === null &&
+    typeof cancelAt === "number" && Number.isSafeInteger(cancelAt) && cancelAt > 0 && cancelAt === periodEnd
+  );
   const matches = subscription.items.data.length === 1 && !subscription.items.has_more && item?.quantity === 1 &&
     item.price.recurring?.interval_count === 1 && (
       (item.price.id === stripeEnvironment("STRIPE_PREMIUM_MONTHLY_PRICE_ID") && item.price.recurring.interval === "month") ||
@@ -17,8 +24,8 @@ export function subscriptionState(subscription: Stripe.Subscription, userId: str
     id: subscription.id, customer, price: item?.price.id ?? null, price_matches: Boolean(matches),
     status: statuses.includes(subscription.status) ? subscription.status : "inactive",
     created_at: new Date(subscription.created * 1000).toISOString(),
-    period_end: item?.current_period_end ? new Date(item.current_period_end * 1000).toISOString() : null,
-    cancel_at_period_end: subscription.cancel_at_period_end,
+    period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+    cancel_at_period_end: scheduledAtPeriodEnd,
   };
 }
 export async function processBillingEvent(event: Stripe.Event) {
