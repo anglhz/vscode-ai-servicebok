@@ -11,6 +11,7 @@ import { Suspense } from "react";
 import { NextService } from "@/components/service-plan/upcoming";
 import { OwnershipSection } from "@/components/vehicle-transfers/ownership-section";
 import { ExportButton } from "@/components/vehicles/export-button";
+import { DeleteEmptyVehicle } from "@/components/vehicles/delete-empty-vehicle";
 
 export const metadata: Metadata = { title: "Fordon" };
 export default async function VehiclePage({ params, searchParams }: { params: Promise<{ vehicleId: string }>; searchParams: Promise<{ page?: string; transferred?: string }> }) {
@@ -34,5 +35,6 @@ export default async function VehiclePage({ params, searchParams }: { params: Pr
     <Suspense fallback={<p className="my-6 text-sm text-muted-foreground">Hämtar serviceplan…</p>}><NextService vehicleId={vehicle.id} /></Suspense>
     <Suspense fallback={<p className="my-6 text-sm text-muted-foreground">Hämtar ägarskap…</p>}><OwnershipSection vehicleId={vehicle.id} /></Suspense>
     <ServiceTimeline vehicleId={vehicle.id} events={history.events} hasMore={history.hasMore} page={page} />
+    <DeleteEmptyVehicle vehicleId={vehicle.id} vehicleName={`${vehicle.make} ${vehicle.model}${vehicle.registration_number ? ` (${vehicle.registration_number})` : ""}`} />
   </>;
 }

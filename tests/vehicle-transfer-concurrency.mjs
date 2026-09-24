@@ -139,6 +139,35 @@ test("transfer waits for an event mutation, preserves it, then denies the seller
   assert.deepEqual((await buyer.query("select title,mileage from service_events where vehicle_id=$1", [v])).rows, [{title:"Before transfer",mileage:12345}]);
 });
 
+// Both orders must be safe: history wins => delete denied; delete wins => the
+// waiting RPC rechecks ownership and cannot insert history for a removed vehicle.
+for (const { name, sql, table } of [
+  { name: "service event", sql: "select create_service_event($1,'service','Race',current_date,123)", table: "service_events" },
+  { name: "document metadata", sql: "select * from create_document($1,'a.pdf','application/pdf',100,'receipt')", table: "documents" },
+  { name: "transfer", sql: "select * from create_vehicle_transfer($1)", table: "vehicle_transfers" },
+]) {
+  for (const deleteFirst of [false, true]) test(`empty vehicle deletion versus ${name}: ${deleteFirst ? 'delete' : 'history'} commits first`, async () => {
+    const first = await connect(a), second = await connect(a);
+    const v = (await first.query("select create_vehicle('car','Race','Empty') as id")).rows[0].id;
+    const deletion = "select delete_empty_vehicle($1)";
+    await first.query("begin");
+    let pending;
+    try {
+      await first.query(deleteFirst ? deletion : sql, [v]);
+      pending = second.query(deleteFirst ? sql : deletion, [v]).then(() => ({ ok: true }), error => ({ code: error.code }));
+      await assertWaiting(second);
+      await first.query("commit");
+    } finally { await first.query("rollback"); }
+    assert.deepEqual(await pending, { code: deleteFirst ? "42501" : "P2001" });
+    for (const relation of ["vehicles", "vehicle_ownerships", table]) {
+      const column = relation === "vehicles" ? "id" : "vehicle_id";
+      assert.equal((await db.query(`select count(*)::int as n from ${relation} where ${column}=$1`, [v])).rows[0].n, deleteFirst ? 0 : 1);
+    }
+    assert.equal((await db.query("select count(*)::int as n from mileage_entries where vehicle_id=$1", [v])).rows[0].n,
+      !deleteFirst && name === "service event" ? 1 : 0);
+  });
+}
+
 // Exercise the complete audit against PostgreSQL-generated proconfig values,
 // not a duplicated JS implementation of the search_path predicate.
 for (const { name, clause, allowed } of [

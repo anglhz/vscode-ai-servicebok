@@ -10,6 +10,16 @@ import { verifyLookup } from "@/services/vehicle-data/receipt";
 
 export class DuplicateVehicleError extends Error {}
 export class InvalidVehicleLookupError extends Error {}
+export class VehicleHasHistoryError extends Error {}
+
+export async function deleteEmptyVehicle(vehicleId: string) {
+  await requireUser();
+  const id = z.uuid().parse(vehicleId);
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("delete_empty_vehicle", { p_vehicle_id: id });
+  if (error && ["P2001", "23001", "23503"].includes(error.code)) throw new VehicleHasHistoryError();
+  if (error) throw new Error("Fordonet kunde inte tas bort.");
+}
 
 const columns = "id, vehicle_type, make, model, registration_number, vin, model_year, current_mileage, fuel_type";
 

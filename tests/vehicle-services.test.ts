@@ -6,7 +6,8 @@ vi.mock("@/lib/supabase/server", () => ({ createReadOnlyClient: async () => mock
 vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("not-found"); }, redirect: (path: string) => { throw new Error(`redirect:${path}`); } }));
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidate }));
 import { requireVehicleAccess } from "@/lib/permissions/vehicle";
-import { createVehicle, getVehicleForCurrentUser, getVehiclesForCurrentUser } from "@/services/vehicles";
+import { createVehicle, deleteEmptyVehicle, getVehicleForCurrentUser, getVehiclesForCurrentUser } from "@/services/vehicles";
+import { deleteMisregisteredVehicle } from "../app/(app)/vehicles/[vehicleId]/actions";
 import { saveVehicle } from "../app/(app)/vehicles/new/actions";
 
 const id = "11111111-1111-4111-8111-111111111111";
@@ -20,6 +21,40 @@ function query(data: unknown, error: unknown = null) {
 }
 function form(values = input) { const result = new FormData(); for (const [key, value] of Object.entries(values)) result.set(key, value); return result; }
 beforeEach(() => { vi.resetAllMocks(); mocks.requireUser.mockResolvedValue({ id: "verified-user" }); });
+
+describe("misregistered vehicle deletion", () => {
+  const confirmed = () => { const data = new FormData(); data.set("confirm", "delete"); return data; };
+  it("requires verified auth before the deletion action and service", async () => {
+    mocks.requireUser.mockRejectedValue(new Error("redirect:/login"));
+    await expect(deleteEmptyVehicle(id)).rejects.toThrow("redirect:/login");
+    await expect(deleteMisregisteredVehicle(id, {}, confirmed())).rejects.toThrow("redirect:/login");
+    expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+  it("validates vehicle IDs before database access", async () => {
+    await expect(deleteEmptyVehicle("invalid")).rejects.toThrow(); expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+  it("requires explicit confirmation", async () => {
+    expect((await deleteMisregisteredVehicle(id, {}, new FormData())).message).toBeTruthy(); expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+  it("uses only the controlled RPC and redirects with success feedback after deletion", async () => {
+    mocks.rpc.mockResolvedValue({ error: null });
+    const data = confirmed(); data.set("owner", "attacker"); data.set("vehicle_id", "other");
+    await expect(deleteMisregisteredVehicle(id, {}, data)).rejects.toThrow("redirect:/vehicles?deleted=1");
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("delete_empty_vehicle", { p_vehicle_id: id });
+    for (const path of ["/vehicles", `/vehicles/${id}`, "/dashboard", "/account"]) expect(mocks.revalidate).toHaveBeenCalledWith(path);
+    expect(mocks.from).not.toHaveBeenCalled();
+  });
+  it.each(["P2001", "23001", "23503"])("returns a Swedish history denial without redirect or cache changes (%s)", async code => {
+    mocks.rpc.mockResolvedValue({ error: { code, message: "private details" } });
+    expect(await deleteMisregisteredVehicle(id, {}, confirmed())).toEqual({ message: "Fordonet kan inte tas bort eftersom det redan har historik." });
+    expect(mocks.revalidate).not.toHaveBeenCalled();
+  });
+  it("does not expose private error details or claim success on access/network failure", async () => {
+    mocks.rpc.mockResolvedValue({ error: { code: "42501", message: "private details" } });
+    expect(await deleteMisregisteredVehicle(id, {}, confirmed())).toEqual({ message: "Fordonet kunde inte tas bort. Försök igen eller kontrollera att du fortfarande äger det." });
+    expect(mocks.revalidate).not.toHaveBeenCalled();
+  });
+});
 
 describe("vehicle permissions and services", () => {
   it("requires a verified session before any database access", async () => {

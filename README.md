@@ -1122,6 +1122,49 @@ webhooks; denna V1 har ingen separat schemalagd reconciliation-worker.
 - [Signerad nedladdning](https://supabase.com/docs/reference/javascript/file-buckets-createsignedurl)
 - [Storage RLS och operationskontroller](https://supabase.com/docs/guides/storage/schema/helper-functions)
 
+## Ta bort felregistrerat fordon
+
+Servicehistoriken tillhör fordonet; ownership är en separat relation. Normal
+fordonshistorik får därför inte raderas när ett fordon byter ägare. Åtgärden
+”Ta bort felregistrerat fordon” på fordonsdetaljen är endast för historikfria
+fordon och kräver en bekräftelsedialog. Raderingen kan inte ångras.
+
+Migration `20260924001000_delete_empty_vehicle.sql` lägger till
+`delete_empty_vehicle(uuid)`. Endast autentiserad, nuvarande aktiv owner får
+anropa funktionen, och fordonet måste ha exakt en ownership-rad. Alla ytterligare
+ägarperioder blockerar, även om samma användare återkommit som ägare.
+
+Kontrollen läser utan klientens RLS-filter och blockerar **alla** rader i
+`service_events`, `mileage_entries`, `documents`, `service_intervals`, `reminders`
+och `vehicle_transfers`. Det inkluderar soft-deleted serviceposter/dokument,
+pending eller städade uppladdningar, inaktiva intervall, klara/avfärdade påminnelser
+och pending/accepted/cancelled/expired transfers. Även miltal som angavs vid
+registrering, inklusive 0, är miltalshistorik och blockerar. Ett kvarvarande
+`current_mileage` eller objekt under fordonets prefix i privata dokumentbucketen
+blockerar också konservativt.
+
+Relationsinventeringen omfattar även `service_event_documents` och
+`vehicle_transfer_documents`: deras RESTRICT-FK kräver föräldrar som redan
+blockerar radering. PDF-exporten är en läsande snapshot utan sparad exporttabell.
+Lookup/provenance är tekniska identifieringsfält på `vehicles` och tas bort med
+ett annars tomt fordon. Den globala `private.vehicle_lookup_config`, profiler,
+abonnemang och billing-state påverkas inte.
+
+Funktionen använder befintligt `lock_service_vehicle`: först FOR UPDATE på
+fordonet, sedan ägarrelationen, med samma ordning som service-, dokument-,
+intervall- och transfermutationer. Ägarraderna låses dessutom FOR UPDATE före
+kontrollen. Om historiken sparas först nekas radering; om raderingen committar
+först nekas den väntande mutationen vid ägarkontrollen. Befintliga RESTRICT-FK
+behålls som ytterligare skydd. Endast den enda ägarraden och fordonsraden tas
+bort, i samma transaktion. Ingen generell DELETE-policy eller DELETE-grant ges.
+Free-gränsen räknar aktiva ägarrelationer och frigörs efter lyckad commit.
+
+Regressioner finns i `tests/delete-empty-vehicle-rls.test.ts` och
+`tests/vehicle-services.test.ts`. Native PostgreSQL-sviten
+`tests/vehicle-transfer-concurrency.mjs` testar båda låsordningarna mot skapande
+av servicepost, dokumentmetadata och transfer. Dessutom kräver ett schema-test
+att beroendeinventeringen granskas om nya FK till `vehicles` tillkommer.
+
 ## Preview/staging och release
 
 Följ [STAGING.md](STAGING.md) för miljövariabler, stabil Vercel-preview,
