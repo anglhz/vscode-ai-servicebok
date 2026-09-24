@@ -1402,12 +1402,28 @@ exponerar `getUserPlan` och `requirePremiumUser`. PDF-routen använder samma hel
 
 `app/api/stripe/webhook/route.ts` verifierar rå signatur och delegerar till
 `services/subscriptions/webhook.ts`. Aktuell Stripe subscription hämtas inom en
-kontolease. `services/subscriptions/backend.ts` är enda konsumenten av service-role-
-fabriken `lib/supabase/admin.ts`; båda är server-only. Det lagret hanterar enbart
+kontolease. `services/subscriptions/backend.ts` använder service-role-
+fabriken `lib/supabase/admin.ts`; båda är server-only. Billinglagret hanterar enbart
 privilegierade billingoperationer, mapping och atomisk webhookpersistens.
 
 Databasmigrationen centraliserar kvoter och serialiserar nya ägarrelationer och
-dokumentreservationer. Vanliga fordon/dokument/transfer-services behåller sina
+dokumentreservationer. Vanliga fordon/dokument-services behåller sina
 sessionsklienter och hanterar bara begripliga gränsfel. Checkout-returen kan visa
 väntestatus men kan inte aktivera Premium. Detaljer och miljökonfiguration finns
 i README:s Billing-avsnitt.
+
+## Distribuerad rate limiting
+
+`lib/rate-limit.ts` verifierar sessionen och använder samma server-only adminfabrik
+för `consume_rate_limit`. Fasta scopes/gränser ligger i migration 11, och den
+privata PostgreSQL-räknaren serialiserar försök från alla instanser. Ett separat
+RPC-anrop committas före provider/rendering/transfer; senare fel återbetalar inte
+budget. Alla skyddade användarflöden stoppar vid limiterfel. Webhooken använder
+fortsatt sina egna signatur-, lease- och idempotencyskydd, inte användarlimitern.
+
+Transfer preview/accept går efter limitering genom server-only wrappers med det
+verifierade kontots UUID och token-digest. Wrappers sätter transaktionslokalt
+auth.uid-underlag, anropar befintlig capability-/ownership-logik och återställer
+identiteten. Klientexecute på kärnfunktionerna och wrappers är återkallad så att
+direkt RPC inte kringgår limitering. Skapa/avbryt transfer använder fortsatt
+sessionsklienten. Ingen service role lämnar servern, och ingen IP-identitet antas.

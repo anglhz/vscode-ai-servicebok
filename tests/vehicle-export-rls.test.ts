@@ -1,3 +1,4 @@
+import { transferServer } from "./helpers/transfer-server";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { createHash } from "node:crypto";
@@ -59,7 +60,7 @@ it("document indicators obey transfer grants, soft deletion and pending lifecycl
   for(const doc of documents){await db.query("insert into storage.objects(bucket_id,name,metadata) values('vehicle_documents',$1,'{\"size\":100,\"mimetype\":\"application/pdf\"}')",[doc.storage_path]);await asUser(a,()=>db.query("select finalize_document($1,$2)",[v,doc.id]));}
   expect(createVehicleExportModel(await asUser(a,snapshot)).events.map(e=>e.has_document)).toEqual([true,true]);
   const transfer=await asUser(a,async()=>(await db.query<{token:string}>("select * from create_vehicle_transfer($1,$2)",[v,[documents[0].id]])).rows[0]);
-  await asUser(b,()=>db.query("select accept_vehicle_transfer($1)",[createHash("sha256").update(transfer.token).digest("hex")]));
+  await asUser(b,()=>transferServer(db, "accept", createHash("sha256").update(transfer.token).digest("hex")));
   expect(await asUser(a,snapshot)).toBeNull();const raw=await asUser(b,snapshot);
   expect(createVehicleExportModel(raw).events.map(e=>e.has_document)).toEqual([true,false]);
   expect(JSON.stringify(raw)).not.toMatch(/PRIVATE_NAME|storage_path|uploaded_by|from_user|to_user|11111111|22222222/);

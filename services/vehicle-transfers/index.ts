@@ -1,11 +1,13 @@
 import "server-only";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { checkPlanLimit } from "@/lib/permissions/plan-limit";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth/session";
 import { getAppUrl } from "@/lib/auth/app-url";
 import { requireVehicleAccess } from "@/lib/permissions/vehicle";
-import { createClient, createReadOnlyClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { transferPreviewSchema, transferSelectionSchema, transferSummarySchema, transferTokenSchema } from "@/lib/validation/transfer";
 
 function tokenHash(token: string) { return createHash("sha256").update(transferTokenSchema.parse(token)).digest("hex"); }
@@ -42,18 +44,18 @@ export async function createVehicleTransfer(vehicleId: string, documentIds: unkn
   return { url: new URL(`/transfer/${result.token}`, base).href, expiresAt: result.expires_at };
 }
 export async function previewVehicleTransfer(token: string) {
-  await requireUser();
+  const user = await requireUser();
   const digest = tokenHash(token);
-  const supabase = await createReadOnlyClient();
-  const { data, error } = await supabase.rpc("preview_vehicle_transfer", { p_token_hash: digest });
+  await enforceRateLimit("transfer_preview");
+  const { data, error } = await createAdminClient().rpc("server_preview_vehicle_transfer", { p_user_id: user.id, p_token_hash: digest });
   if (error) throw new Error("Överföringen kunde inte hämtas.");
   return z.array(transferPreviewSchema).max(1).parse(data)[0] ?? null;
 }
 export async function acceptVehicleTransfer(token: string) {
-  await requireUser();
+  const user = await requireUser();
   const digest = tokenHash(token);
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc("accept_vehicle_transfer", { p_token_hash: digest });
+  await enforceRateLimit("transfer_accept");
+  const { data, error } = await createAdminClient().rpc("server_accept_vehicle_transfer", { p_user_id: user.id, p_token_hash: digest });
   checkPlanLimit(error);
   if (error) throw new Error("Överföringen kunde inte accepteras. Länken kan ha gått ut, avbrutits eller redan använts.");
   return z.uuid().parse(data);

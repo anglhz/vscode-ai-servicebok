@@ -3,24 +3,14 @@ import { requireUser } from "@/lib/auth/session";
 import { getVehicleProvider } from "./provider";
 import { lookupMessages, lookupRegistrationSchema, normalizedVehicleSchema, VehicleLookupError, type LookupResult } from "./types";
 import { signLookup } from "./receipt";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 
-// Bounded per-process protection. A provider account quota is also needed when scaling.
-const attempts = new Map<string, { count: number; until: number }>();
-export function allowLookup(user: string, now = Date.now()) {
-  for (const [id, entry] of attempts) if (entry.until <= now) attempts.delete(id);
-  const entry = attempts.get(user);
-  if (!entry) {
-    if (attempts.size >= 1000) return false;
-    attempts.set(user, { count: 1, until: now + 60_000 }); return true;
-  }
-  if (entry.count >= 10) return false;
-  entry.count++; return true;
-}
 export async function lookupVehicle(input: unknown): Promise<LookupResult> {
   const user = await requireUser();
   const parsed = lookupRegistrationSchema.safeParse(input);
   if (!parsed.success) return { message: "Ange ett registreringsnummer med bokstäver och siffror." };
-  if (!allowLookup(user.id)) return { message: lookupMessages.rate_limit };
+  try { await enforceRateLimit("vehicle_lookup"); }
+  catch (error) { return { message: lookupMessages[error instanceof RateLimitExceededError ? "rate_limit" : "unavailable"] }; }
   const provider = getVehicleProvider();
   if (!provider || Buffer.byteLength(process.env.VEHICLE_LOOKUP_SIGNING_SECRET ?? "") < 32) return { message: lookupMessages.unavailable };
   try {

@@ -1,3 +1,4 @@
+import { transferServer } from "./helpers/transfer-server";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { createHash } from "node:crypto";
@@ -16,7 +17,7 @@ async function asUser<T>(user: string, fn: () => Promise<T>) {
 }
 async function vehicle() { return asUser(a, async () => (await db.query<{ id: string }>("select create_vehicle('car','Volvo','V60',p_current_mileage=>10000) as id")).rows[0].id); }
 async function start(v: string, docs: string[] = []) { return (await db.query<Transfer>("select * from create_vehicle_transfer($1,$2)", [v, docs])).rows[0]; }
-async function accept(t: Transfer) { return db.query("select accept_vehicle_transfer($1)", [hash(t.token)]); }
+async function accept(t: Transfer) { return transferServer(db, "accept", hash(t.token)); }
 async function document(v: string, ready = true) {
   const d = await asUser(a, async () => (await db.query<Document>("select * from create_document($1,'privat.pdf','application/pdf',100,'receipt')", [v])).rows[0]);
   if (ready) {
@@ -69,8 +70,8 @@ describe("vehicle transfer capabilities and lifecycle", () => {
   });
   it("rejects incorrect tokens without revealing a transfer", async () => {
     await asUser(b, async () => {
-      expect((await db.query("select * from preview_vehicle_transfer($1)", ["0".repeat(64)])).rows).toEqual([]);
-      await expect(db.query("select accept_vehicle_transfer($1)", ["0".repeat(64)])).rejects.toMatchObject({ code: "42501" });
+      expect((await transferServer(db, "preview", "0".repeat(64))).rows).toEqual([]);
+      await expect(transferServer(db, "accept", "0".repeat(64))).rejects.toMatchObject({ code: "42501" });
     });
   });
   it("rejects expired capabilities and lazily expires the old row when starting again", async () => {
@@ -78,7 +79,7 @@ describe("vehicle transfer capabilities and lifecycle", () => {
     await db.query("update vehicle_transfers set created_at=now()-interval '8 days',expires_at=now()-interval '1 day' where id=$1", [t.id]);
     await asUser(b, async () => {
       await expect(accept(t)).rejects.toMatchObject({ code: "42501" });
-      expect((await db.query("select status,make from preview_vehicle_transfer($1)", [hash(t.token)])).rows).toEqual([{ status: "expired", make: null }]);
+      expect((await transferServer(db, "preview", hash(t.token), "status,make")).rows).toEqual([{ status: "expired", make: null }]);
     });
     await asUser(a, () => start(v));
     expect((await db.query("select status from vehicle_transfers where id=$1", [t.id])).rows).toEqual([{ status: "expired" }]);
@@ -123,7 +124,7 @@ describe("vehicle transfer capabilities and lifecycle", () => {
   });
   it("preview returns only basic vehicle fields, expiry, status, document count and self flag", async () => {
     const v = await vehicle(), d = await document(v), t = await asUser(a, () => start(v,[d.id]));
-    const rows = await asUser(b, () => db.query<Record<string,unknown>>("select * from preview_vehicle_transfer($1)", [hash(t.token)]));
+    const rows = await asUser(b, () => transferServer(db, "preview", hash(t.token)));
     expect(Object.keys(rows.rows[0]).sort()).toEqual(["document_count","expires_at","is_sender","make","model","registration_number","status"]);
     expect(rows.rows[0]).toMatchObject({document_count:1,make:"Volvo",is_sender:false});
   });

@@ -97,3 +97,21 @@ describe("scoped export service and download route",()=>{
     expect(response.status).toBe(500);expect(await response.text()).not.toContain("secret");
   });
 });
+
+const limiter = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/rate-limit", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/rate-limit")>(), enforceRateLimit: limiter }));
+import { RateLimitExceededError } from "@/lib/rate-limit";
+
+it("PDF deny gives 429 and safe Retry-After before loading/rendering any PDF data", async () => {
+  limiter.mockRejectedValue(new RateLimitExceededError(42));
+  const response = await POST(new Request("http://localhost/export", { method: "POST" }), { params: Promise.resolve({ vehicleId: id }) });
+  expect(response.status).toBe(429); expect(response.headers.get("Retry-After")).toBe("42");
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(await response.json()).toEqual({ message: "För många försök. Vänta en stund och försök igen." });
+  expect(mocks.rpc).not.toHaveBeenCalled(); expect(limiter).toHaveBeenCalledWith("pdf_export");
+});
+it("PDF fails closed on limiter failure without reading data or returning private details", async () => {
+  limiter.mockRejectedValue(new Error("private key"));
+  const response = await POST(new Request("http://localhost/export", { method: "POST" }), { params: Promise.resolve({ vehicleId: id }) });
+  expect(response.status).toBe(500); expect(await response.text()).not.toContain("private key"); expect(mocks.rpc).not.toHaveBeenCalled();
+});

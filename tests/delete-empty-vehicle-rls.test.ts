@@ -1,3 +1,4 @@
+import { transferServer } from "./helpers/transfer-server";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { randomUUID, createHash } from "node:crypto";
@@ -105,7 +106,7 @@ for (const state of ["pending", "cancelled", "expired", "accepted"]) it(`transfe
   if (state === "expired") await db.query("update vehicle_transfers set status='expired' where id=$1", [t.id]);
   if (state === "accepted") {
     owner = await account();
-    await asUser(owner, () => db.query("select accept_vehicle_transfer($1)", [createHash("sha256").update(t.token).digest("hex")]));
+    await asUser(owner, () => transferServer(db, "accept", createHash("sha256").update(t.token).digest("hex")));
   }
   await blocked(owner, v);
   expect((await db.query("select status from vehicle_transfers where id=$1", [t.id])).rows).toEqual([{ status: state }]);

@@ -6,7 +6,7 @@ vi.mock("@/services/vehicle-data/provider", () => ({ getVehicleProvider: mocks.p
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => mocks }));
 vi.mock("next/navigation", () => ({ notFound: vi.fn(), redirect: (path: string) => { throw new Error(path); } }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-import { lookupVehicle, allowLookup } from "@/services/vehicle-data";
+import { lookupVehicle } from "@/services/vehicle-data";
 import { VehicleLookupError } from "@/services/vehicle-data/types";
 import { createVehicle } from "@/services/vehicles";
 import { saveVehicle } from "../app/(app)/vehicles/new/actions";
@@ -32,10 +32,6 @@ describe("lookup and confirmation services", () => {
     mocks.provider.mockReturnValueOnce(null); expect((await lookupVehicle("ABC123")).message).toContain("manuellt");
     mocks.lookup.mockResolvedValue({ vehicle_type: "car" }); expect((await lookupVehicle("ABC123")).message).toContain("manuellt");
   });
-  it("limits repeated attempts and permits a new window", () => {
-    const now = Date.now(); for (let n = 0; n < 10; n++) expect(allowLookup("limiter-test", now)).toBe(true);
-    expect(allowLookup("limiter-test", now)).toBe(false); expect(allowLookup("limiter-test", now + 60000)).toBe(true);
-  });
   it("uses the same atomic create RPC, permits corrections and sends signed provenance", async () => {
     const preview = await lookupVehicle("ABC123"); mocks.rpc.mockResolvedValue({ data: "11111111-1111-4111-8111-111111111111" });
     await createVehicle({ ...input, external_provider: "forged" }, preview.receipt);
@@ -51,4 +47,21 @@ describe("lookup and confirmation services", () => {
     form.set("confirmed", "yes"); mocks.rpc.mockResolvedValue({ error: { code: "23505", message: "private owner info" } });
     expect((await saveVehicle({}, form)).message).toBe("Fordonet finns redan registrerat i Servicebok. Ingen åtkomst har ändrats.");
   });
+});
+
+const limiter = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/rate-limit", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/rate-limit")>(), enforceRateLimit: limiter }));
+import { RateLimitExceededError } from "@/lib/rate-limit";
+
+it("stops lookup after distributed deny without constructing/calling a provider", async () => {
+  limiter.mockRejectedValue(new RateLimitExceededError(60));
+  expect((await lookupVehicle("ABC123")).message).toContain("manuellt");
+  expect(limiter).toHaveBeenCalledWith("vehicle_lookup");
+  expect(mocks.provider).not.toHaveBeenCalled(); expect(mocks.lookup).not.toHaveBeenCalled();
+});
+it("fails lookup closed on limiter DB failure without leaking details", async () => {
+  limiter.mockRejectedValue(new Error("private DB key"));
+  const result = await lookupVehicle("ABC123");
+  expect(result.message).toContain("manuellt"); expect(result.message).not.toContain("private");
+  expect(mocks.lookup).not.toHaveBeenCalled();
 });

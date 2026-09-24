@@ -16,7 +16,7 @@ byggs in i klienten: ändring kräver nytt bygge. Övriga variabler är server-o
 | APP_URL | Required för auth/callback/transfer/billing | Server, ej hemlig | Exakt stabil HTTPS-bas-URL för testgrenen | Exakt ordinarie HTTPS-origin |
 | NEXT_PUBLIC_SUPABASE_URL | Required | Public | Dedikerat testprojekt | Separat produktionsprojekt |
 | NEXT_PUBLIC_SUPABASE_ANON_KEY | Required | Public, anon/publishable | Samma testprojekt som URL | Samma produktionsprojekt som URL; aldrig service role |
-| SUPABASE_SERVICE_ROLE_KEY | Required för Billing | Server secret | Endast testprojekt | Endast produktionsprojekt |
+| SUPABASE_SERVICE_ROLE_KEY | Required för distribuerad limiter, transfer preview/accept och Billing | Server secret | Endast testprojekt | Endast produktionsprojekt |
 | STRIPE_SECRET_KEY | Required för Billing | Server secret | sk_test/rk_test; live nekas i Vercel Preview | Avsedd separat livekonfiguration efter releasegodkännande |
 | STRIPE_WEBHOOK_SECRET | Required för Billing | Server secret | Stagingendpointens whsec; CLI har eget secret | Produktionsendpointens eget secret |
 | STRIPE_PREMIUM_MONTHLY_PRICE_ID | Required för Billing | Server | Testpris 39 SEK, month/1, antal 1 | Eget livepris 39 SEK/månad |
@@ -92,6 +92,20 @@ Ordning, utan manuella mellansteg:
 8. 20260920000800_vehicle_export
 9. 20260921000900_subscriptions
 10. 20260924001000_delete_empty_vehicle
+11. 20260924001100_distributed_rate_limits
+
+Migration 11 stänger direkt klientexecute på transfer preview/accept. Deploya
+migration och kompatibel serverkod samordnat i staging; äldre serverkod kan inte
+köra dessa två RPC:er efter migrationen. Limiterfel stoppar lookup, PDF, Checkout,
+Portal och transfer innan vidare arbete. Service role måste finnas även om Stripe
+inte är aktiverat. Nyckeln används bara på servern och inga nya secrets behövs.
+
+Verifiera över flera Vercel-instanser med samma konto: lookup 10/min, PDF 5/min,
+Checkout 5/10 min, Portal 10/10 min, transfer preview 30/min och accept 10/10 min.
+PDF ska ge 429 med Retry-After och no-store; deny/DB-fel får inte nå provider eller
+rendering. Kontrollera att direkta anon/authenticated-anrop till både gamla och
+nya transfer preview/accept-RPC:er nekas. Stripe-webhook ska fortsatt kunna retrya
+oberoende av användarens räknare. Använd separata stagingkonton för belastning.
 
 `pgcrypto` installeras av migration 5 i `extensions`. Om ett äldre projekt redan
 har extensionen i annat schema stoppar migrationen tydligt. Flytta inte extensioner
