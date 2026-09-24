@@ -1,5 +1,6 @@
 import "server-only";
 import type Stripe from "stripe";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { requireUser } from "@/lib/auth/session";
 import { getAppUrl } from "@/lib/auth/app-url";
 import { getStripe, stripeEnvironment } from "@/lib/stripe/server";
@@ -17,6 +18,7 @@ async function portal(customer: string, origin: string) {
 }
 export async function startPortal() {
   const user = await requireUser();
+  await enforceRateLimit("billing_portal");
   const origin = getAppUrl();
   return withBillingLease(user.id, async (_operation, customer) => {
     if (!customer) throw new Error("No billing customer");
@@ -36,6 +38,7 @@ function checkoutParameters(userId: string, customer: string, operation: Billing
 export async function startCheckout(plan: unknown) {
   const user = await requireUser();
   if (plan !== "monthly" && plan !== "yearly") throw new Error("Invalid billing plan");
+  await enforceRateLimit("billing_checkout");
   const origin = getAppUrl(), price = stripeEnvironment(plan === "monthly" ? "STRIPE_PREMIUM_MONTHLY_PRICE_ID" : "STRIPE_PREMIUM_YEARLY_PRICE_ID"), stripe = getStripe();
   return withBillingLease(user.id, async (initial, savedCustomer) => {
     let operation = initial, customer = savedCustomer;

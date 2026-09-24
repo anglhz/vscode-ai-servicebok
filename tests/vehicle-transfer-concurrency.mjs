@@ -17,10 +17,15 @@ let db;
 const a = "11111111-1111-4111-8111-111111111111", b = "22222222-2222-4222-8222-222222222222", c = "33333333-3333-4333-8333-333333333333";
 async function connect(user) {
   const client = new Client({ connectionString: url.href });
-  await client.connect(); connections.push(client);
+  await client.connect(); connections.push(client); client.testUser = user;
   await client.query("set statement_timeout='10s'");
   if (user) { await client.query("set role authenticated"); await client.query("select set_config('request.jwt.claim.sub',$1,false)", [user]); }
   return client;
+}
+async function acceptAsServer(client, digest) {
+  await client.query('set role service_role');
+  try { return await client.query('select public.server_accept_vehicle_transfer($1,$2)', [client.testUser, digest]); }
+  finally { await client.query('set role authenticated'); }
 }
 async function fixture() {
   const seller = await connect(a);
@@ -95,7 +100,7 @@ test("transfer racing with first Free vehicle creation rolls back the complete t
   const user=randomUUID();await db.query("insert into auth.users values($1)",[user]);
   const {v,digest}=await fixture(),first=await connect(user),second=await connect(user);
   await first.query("begin");await first.query("select create_vehicle('car','Existing','One')");
-  const pending=second.query("select accept_vehicle_transfer($1)",[digest]).then(()=>({ok:true}),error=>({code:error.code}));
+  const pending=acceptAsServer(second, digest).then(()=>({ok:true}),error=>({code:error.code}));
   await assertWaiting(second);await first.query("commit");assert.deepEqual(await pending,{code:"P1001"});
   assert.deepEqual((await db.query("select user_id from vehicle_ownerships where vehicle_id=$1 and ended_at is null",[v])).rows,[{user_id:a}]);
 });
@@ -114,8 +119,8 @@ test("concurrent billing workers obtain one lease; expired worker cannot mutate 
 test("two overlapping accepts wait on row locks and exactly one recipient becomes owner", async () => {
   const { v, digest } = await fixture(), buyer = await connect(b), rival = await connect(c);
   await buyer.query("begin");
-  await buyer.query("select accept_vehicle_transfer($1)", [digest]);
-  const competing = rival.query("select accept_vehicle_transfer($1)", [digest]).then(() => ({ ok:true }), error => ({ code:error.code }));
+  await acceptAsServer(buyer, digest);
+  const competing = acceptAsServer(rival, digest).then(() => ({ ok:true }), error => ({ code:error.code }));
   await assertWaiting(rival);
   await buyer.query("commit");
   assert.deepEqual(await competing, { code:"42501" });
@@ -125,7 +130,7 @@ test("two overlapping accepts wait on row locks and exactly one recipient become
 test("cancel racing with accept invalidates the capability before waiting acceptance can proceed", async () => {
   const { seller, v, transfer, digest } = await fixture(), buyer = await connect(b);
   await seller.query("begin"); await seller.query("select cancel_vehicle_transfer($1,$2)", [v,transfer.id]);
-  const accepting = buyer.query("select accept_vehicle_transfer($1)", [digest]).then(() => ({ok:true}), error => ({code:error.code}));
+  const accepting = acceptAsServer(buyer, digest).then(() => ({ok:true}), error => ({code:error.code}));
   await assertWaiting(buyer); await seller.query("commit");
   assert.deepEqual(await accepting, {code:"42501"});
   assert.deepEqual((await db.query("select user_id from vehicle_ownerships where vehicle_id=$1 and status='active'", [v])).rows, [{user_id:a}]);
@@ -133,7 +138,7 @@ test("cancel racing with accept invalidates the capability before waiting accept
 test("transfer waits for an event mutation, preserves it, then denies the seller's subsequent event", async () => {
   const { seller, v, digest } = await fixture(), buyer = await connect(b);
   await seller.query("begin"); await seller.query("select create_service_event($1,'service','Before transfer',current_date,12345)", [v]);
-  const accepting = buyer.query("select accept_vehicle_transfer($1)", [digest]);
+  const accepting = acceptAsServer(buyer, digest);
   await assertWaiting(buyer); await seller.query("commit"); await accepting;
   await assert.rejects(seller.query("select create_service_event($1,'service','After transfer',current_date)", [v]), {code:"42501"});
   assert.deepEqual((await buyer.query("select title,mileage from service_events where vehicle_id=$1", [v])).rows, [{title:"Before transfer",mileage:12345}]);
@@ -167,6 +172,36 @@ for (const { name, sql, table } of [
       !deleteFirst && name === "service event" ? 1 : 0);
   });
 }
+
+async function limiterAccount() {
+  const user = randomUUID(); await db.query("insert into auth.users values($1)", [user]); return user;
+}
+const consume = (client, user, scope = 'pdf_export') => client.query("select public.consume_rate_limit($1,$2) as result", [scope, user]).then(r => r.rows[0].result);
+test("distributed limiter: exactly one of two transactions can consume the last slot", async () => {
+  const user = await limiterAccount(), first = await connect(), second = await connect();
+  for (let i = 0; i < 4; i++) assert.equal((await consume(db, user)).allowed, true);
+  await first.query("begin"); assert.equal((await consume(first, user)).allowed, true);
+  const pending = consume(second, user);
+  try { await assertWaiting(second); } finally { await first.query("commit"); }
+  assert.equal((await pending).allowed, false);
+  assert.equal((await db.query("select used from private.rate_limits where user_id=$1", [user])).rows[0].used, 5);
+});
+test("distributed limiter: 12 independent connections allow exactly five requests in one window", async () => {
+  const user = await limiterAccount(), clients = await Promise.all(Array.from({ length: 12 }, () => connect()));
+  const results = await Promise.all(clients.map(client => consume(client, user)));
+  assert.equal(results.filter(r => r.allowed).length, 5);
+  assert.ok(results.filter(r => !r.allowed).every(r => r.retry_after >= 1 && r.retry_after <= 60));
+});
+test("distributed limiter: expiry reuses the row, users/scopes remain independent", async () => {
+  const user = await limiterAccount(), other = await limiterAccount();
+  for (let i = 0; i < 5; i++) await consume(db, user);
+  assert.equal((await consume(db, user)).allowed, false);
+  assert.equal((await consume(db, other)).allowed, true);
+  assert.equal((await consume(db, user, 'billing_checkout')).allowed, true);
+  await db.query("update private.rate_limits set expires_at=clock_timestamp()-interval '1 second' where user_id=$1 and scope='pdf_export'", [user]);
+  assert.equal((await consume(db, user)).allowed, true);
+  assert.deepEqual((await db.query("select used from private.rate_limits where user_id=$1 and scope='pdf_export'", [user])).rows, [{ used: 1 }]);
+});
 
 // Exercise the complete audit against PostgreSQL-generated proconfig values,
 // not a duplicated JS implementation of the search_path predicate.

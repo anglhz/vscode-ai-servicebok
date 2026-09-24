@@ -196,3 +196,28 @@ it("an older cancellation notification uses current Stripe state when cancellati
   await processBillingEvent(event("customer.subscription.updated",{...subscription(),ended_at:null,cancel_at:4102444800}));
   expect(m.apply.mock.calls[0][3].cancel_at_period_end).toBe(false);
 });
+
+const limiter = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/rate-limit", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/rate-limit")>(), enforceRateLimit: limiter }));
+import { RateLimitExceededError } from "@/lib/rate-limit";
+
+it.each(["deny", "database failure"])("Checkout and Portal stop before any lease/provider work on limiter %s", async failure => {
+  limiter.mockRejectedValue(failure === "deny" ? new RateLimitExceededError(600) : new Error("private key"));
+  await expect(startCheckout("monthly")).rejects.toThrow(); await expect(startPortal()).rejects.toThrow();
+  expect(limiter.mock.calls).toEqual([["billing_checkout"], ["billing_portal"]]);
+  for (const fn of [m.lease, m.operation, m.customer, m.checkout, m.list, m.portal]) expect(fn).not.toHaveBeenCalled();
+});
+it("reusing an open Checkout still consumes one user attempt", async () => {
+  operation.checkout_session_id = "cs_old"; operation.checkout_price_id = "price_monthly";
+  m.session.mockResolvedValue({ customer: "cus_own", status: "open", url: "https://checkout.stripe.com/c/pay/old" });
+  await startCheckout("monthly"); expect(limiter).toHaveBeenCalledExactlyOnceWith("billing_checkout");
+});
+it("billing action shows a safe Swedish rate limit message", async () => {
+  limiter.mockRejectedValue(new RateLimitExceededError(600));
+  const form = new FormData(); form.set("plan", "monthly");
+  expect(await upgradeAccount({ message: "" }, form)).toEqual({ message: "För många försök. Vänta en stund och försök igen." });
+});
+it("webhook never consumes the user limiter even if it is unavailable", async () => {
+  limiter.mockRejectedValue(new Error("unavailable")); await processBillingEvent(event());
+  expect(limiter).not.toHaveBeenCalled(); expect(m.apply).toHaveBeenCalled();
+});

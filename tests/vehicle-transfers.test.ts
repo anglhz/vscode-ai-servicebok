@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({ user:vi.fn(),access:vi.fn(),rpc:vi.fn(),from:v
 vi.mock("@/lib/auth/session", () => ({ requireUser:mocks.user }));
 vi.mock("@/lib/permissions/vehicle", () => ({ requireVehicleAccess:mocks.access }));
 vi.mock("@/lib/supabase/server", () => ({ createClient:async()=>({...mocks,auth:mocks}),createReadOnlyClient:async()=>mocks }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => mocks }));
 vi.mock("next/headers", () => ({ cookies:async()=>mocks }));
 vi.mock("next/cache", () => ({ revalidatePath:mocks.refresh }));
 vi.mock("next/navigation", () => ({ redirect:(path:string)=>{throw new Error(`redirect:${path}`);} }));
@@ -46,7 +47,8 @@ describe("transfer services and actions",()=>{
   it("sends hashes, never plaintext tokens, to preview and accept",async()=>{
     mocks.rpc.mockResolvedValueOnce({data:[],error:null}).mockResolvedValueOnce({data:id,error:null});
     expect(await previewVehicleTransfer(token)).toBeNull();expect(await acceptVehicleTransfer(token)).toBe(id);
-    expect(mocks.rpc.mock.calls).toEqual([["preview_vehicle_transfer",{p_token_hash:digest}],["accept_vehicle_transfer",{p_token_hash:digest}]]);
+    expect(mocks.rpc.mock.calls).toEqual([["server_preview_vehicle_transfer",{p_user_id:id,p_token_hash:digest}],["server_accept_vehicle_transfer",{p_user_id:id,p_token_hash:digest}]]);
+    expect(limiter.mock.calls).toEqual([["transfer_preview"],["transfer_accept"]]);
   });
   it("requires confirmation for create and accept without calling the database",async()=>{
     expect((await startTransfer(id,{},new FormData())).message).toBeTruthy();
@@ -106,4 +108,16 @@ describe("safe authentication continuation",()=>{
     const response=await callbackGET(new NextRequest("https://servicebok.example/auth/callback?code=bad"));
     expect(response.headers.get("location")).toBe("https://servicebok.example/auth/confirmation-error");expect(mocks.delete).not.toHaveBeenCalled();
   });
+});
+
+const limiter = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/rate-limit", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/rate-limit")>(), enforceRateLimit: limiter }));
+import { RateLimitExceededError } from "@/lib/rate-limit";
+
+it.each(["deny", "database failure"])("transfer preview and accept fail generically before token RPC on %s", async failure => {
+  limiter.mockRejectedValue(failure === "deny" ? new RateLimitExceededError(600) : new Error(`private ${token}`));
+  await expect(previewVehicleTransfer(token)).rejects.toThrow();
+  const state = await acceptTransfer(token, {}, form({ confirm: "yes", user_id: "forged" }));
+  expect(state.message).toBe("Överföringen kunde inte accepteras. Länken kan ha gått ut, avbrutits eller redan använts. Logga in igen om din session har gått ut.");
+  expect(mocks.rpc).not.toHaveBeenCalled(); expect(mocks.refresh).not.toHaveBeenCalled();
 });

@@ -1315,3 +1315,22 @@ Fullständig relationsinventering och concurrency-strategi finns i README.
 
 Servicehistorik tillhör fordonet och ownership är separat. Detta snäva undantag
 ger därför ingen rätt att radera normal fordonshistorik eller tidigare ägarperioder.
+
+## Distribuerade försöksspärrar
+
+Migration `20260924001100_distributed_rate_limits.sql` inför `private.rate_limits`
+med (user_id, scope) som primärnyckel, used och expires_at. User-id refererar till
+profiles med ON DELETE CASCADE; högst sex scope-rader kan finnas per konto.
+Utgångna fönster skrivs över vid nästa konsumtion. Inga IP-adresser eller tokens
+sparas. RLS utan klientpolicies och återkallade tabellgrants skyddar räknarna.
+
+`consume_rate_limit(text,uuid)` är server-only SECURITY DEFINER med tom search_path,
+scope-allowlist och fasta gränser. INSERT ON CONFLICT + radlås serialiserar
+konsumtion även över flera instanser. Tiden tas efter låset; nekade försök varken
+förlänger fönstret eller ökar räknaren över gränsen. Returvärdet innehåller bara
+allowed och retry_after, inga nycklar eller räknare.
+
+Preview/accept för transfers förlorar klientexecute och får server-only wrappers
+som använder verifierat user-id. Kärnlogik, ägarlås och capability-kontroller
+behålls. Appen committar limiteranropet separat före transfer så misslyckade
+acceptförsök inte återställer budgeten. Scopes och driftkrav finns i README.

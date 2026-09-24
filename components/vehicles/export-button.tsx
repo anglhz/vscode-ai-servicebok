@@ -12,6 +12,7 @@ export function ExportButton({ vehicleId }: { vehicleId:string }) {
     try {
       const response=await fetch(`/vehicles/${encodeURIComponent(vehicleId)}/export`,{method:"POST",cache:"no-store"});
       if(response.status===403) {setMessage("PDF-export kräver Premium.");setPremiumRequired(true);return;}
+      if(response.status===429) {setMessage("För många försök. Vänta en stund och försök igen.");return;}
       if(!response.ok || !response.headers.get("Content-Type")?.startsWith("application/pdf")) throw new Error("export failed");
       const blob=await response.blob(),url=URL.createObjectURL(blob);
       const filename=response.headers.get("Content-Disposition")?.match(/filename="(servicebok_[A-Za-z0-9_]+\.pdf)"/)?.[1] ?? "servicebok_fordon.pdf";

@@ -1,3 +1,4 @@
+import { transferServer } from "./helpers/transfer-server";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { randomUUID, createHash } from "node:crypto";
@@ -83,7 +84,7 @@ it("Premium has higher quota and downgrade preserves documents while blocking mo
 it("Free recipient with one vehicle cannot accept; sender ownership and transfer remain intact", async () => {
   const seller=await account(),buyer=await account(),v=await vehicle(seller);await vehicle(buyer);
   const transfer=await asUser(seller,async()=>(await db.query<{id:string;token:string}>("select * from create_vehicle_transfer($1)",[v])).rows[0]);
-  await expect(asUser(buyer,()=>db.query("select accept_vehicle_transfer($1)",[createHash("sha256").update(transfer.token).digest("hex")]))).rejects.toMatchObject({code:"P1001"});
+  await expect(asUser(buyer,()=>transferServer(db, "accept", createHash("sha256").update(transfer.token).digest("hex")))).rejects.toMatchObject({code:"P1001"});
   expect((await db.query("select user_id from vehicle_ownerships where vehicle_id=$1 and ended_at is null",[v])).rows).toEqual([{user_id:seller}]);
   expect((await db.query("select status from vehicle_transfers where id=$1",[transfer.id])).rows).toEqual([{status:"pending"}]);
 });
@@ -91,7 +92,7 @@ it("selected transferred documents move quota; over-quota transfer is entirely r
   const seller=await account(true),buyer=await account(),v=await vehicle(seller),ids:string[]=[];
   for(let n=0;n<6;n++) {const d=await document(seller,v);ids.push(d.id);await db.query("insert into storage.objects(bucket_id,name,metadata) values('vehicle_documents',$1,'{\"size\":10485760,\"mimetype\":\"application/pdf\"}')",[d.storage_path]);await asUser(seller,()=>db.query("select finalize_document($1,$2)",[v,d.id]));}
   const transfer=await asUser(seller,async()=>(await db.query<{id:string;token:string}>("select * from create_vehicle_transfer($1,$2)",[v,ids])).rows[0]);
-  const accept=()=>asUser(buyer,()=>db.query("select accept_vehicle_transfer($1)",[createHash("sha256").update(transfer.token).digest("hex")]));
+  const accept=()=>asUser(buyer,()=>transferServer(db, "accept", createHash("sha256").update(transfer.token).digest("hex")));
   await expect(accept()).rejects.toMatchObject({code:"P1002"});
   expect((await db.query("select user_id from vehicle_ownerships where vehicle_id=$1 and ended_at is null",[v])).rows).toEqual([{user_id:seller}]);
   expect((await overview(seller)).document_bytes).toBe(62914560);

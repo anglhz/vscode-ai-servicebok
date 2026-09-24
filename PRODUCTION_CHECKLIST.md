@@ -47,15 +47,18 @@ Se [STAGING.md](STAGING.md) och [testprotokoll](docs/SMOKE_TEST.md).
 | Yta | Befintligt skydd | Åtgärd att verifiera före publik release |
 | --- | --- | --- |
 | Auth/signup | Supabase Auth-gränser, inputvalidering | Projektets SMTP/signup/login-gränser, CAPTCHA vid behov, kontrollerat missbrukstest |
-| Lookup | Auth, 10/min per process/konto, timeout/body-limit | Distribuerad kant-/providerquota över flera Vercel-instanser; lokal Map räcker inte |
-| Transfer preview/accept | Auth, 256-bit capability, expiry, transaktionslås | IP/konto-gräns utan att logga token; brute force/flood-test |
-| PDF | Auth, Premium, ägarskap, 60s route | Samtidighets-/kostnadsgräns per konto och WAF; långhistorik kan förbruka minne |
-| Checkout/Portal | Auth, konto-lease, idempotency | Frekvensgräns även för avslutade sessioner/Portal; providerbudget |
+| Lookup | Auth, PostgreSQL 10/min/konto, fail closed, timeout/body-limit | Global providerquota/kostnadsgräns och WAF mot masskonton |
+| Transfer preview/accept | Auth, PostgreSQL preview 30/min och accept 10/10 min/konto, server-only RPC, capability och transaktionslås | Flood-test; WAF för anonym trafik och masskonton, inga råa capability-loggar |
+| PDF | Auth, Premium, ägarskap, PostgreSQL 5/min/konto, 429, 60s route | Samtidighets-/kostnadsgräns och WAF; långhistorik kan förbruka minne |
+| Checkout/Portal | Auth, PostgreSQL 5 respektive 10/10 min/konto, konto-lease, idempotency | Providerbudget och flerinstanstest; även Checkout-reuse konsumerar försök |
 | Webhook | Signatur, idempotency, korta nätverkstimeouts | Skydda body/volym/loggkostnad; blockera inte legitima retries med för snäv WAF |
 
-Inget nytt in-memory-lås påstår sig skydda en distribuerad deployment. Dessa
-driftgränser måste beslutas och verifieras före publik lansering; denna PR inför
-inte Redis, ny rate-limit-tjänst eller en full observability-stack.
+Rate limiting är distribuerad via PostgreSQL, utan Redis eller extern tjänst.
+Verifiera migration 11, servernyckeln och fail-closed-beteende över flera instanser
+i staging. Alla fönster/gränser finns i consume_rate_limit. Anonym IP-limitering
+är inte implementerad; godtycklig x-forwarded-for används inte som identitet.
+Webhook-retries omfattas inte av användarlimitern. Kvarvarande driftgränser ovan
+ska fortfarande beslutas och verifieras före publik lansering.
 
 ## Retention, backup och återställning
 

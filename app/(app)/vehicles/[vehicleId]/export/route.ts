@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth/session";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import { requireVehicleAccess } from "@/lib/permissions/vehicle";
 import { getVehicleExportData } from "@/services/exports/data";
 import { exportFilename } from "@/services/exports/model";
@@ -14,12 +15,14 @@ export async function POST(_request:Request, { params }: { params:Promise<{vehic
     if(!await getCurrentUser()) return Response.json({message:"PDF kunde inte skapas. Försök igen."},{status:401,headers});
     await requirePremiumUser();
     const {vehicleId}=await params;
+    await enforceRateLimit("pdf_export");
     const data=await getVehicleExportData(vehicleId);
     const pdf=await generateVehiclePdf(data);
     // Recheck after rendering: an ownership transfer during generation must not return the PDF.
     await requireVehicleAccess(vehicleId);
     return new Response(new Uint8Array(pdf),{headers:{...headers,"Content-Type":"application/pdf","Content-Disposition":`attachment; filename="${exportFilename(data)}"`}});
   } catch (error) {
+    if (error instanceof RateLimitExceededError) return Response.json({message:error.message},{status:429,headers:{...headers,"Retry-After":String(error.retryAfter)}});
     if (error instanceof PremiumRequiredError) return Response.json({message:error.message,premiumRequired:true},{status:403,headers});
     return Response.json({message:"PDF kunde inte skapas. Försök igen."},{status:500,headers});
   }

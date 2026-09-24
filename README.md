@@ -526,10 +526,9 @@ Server action `searchVehicle` verifierar requireUser innan provideranrop. Reques
 body har fem sekunders timeout; ingen automatisk retry eller refresh görs. 404,
 429, timeout, nätverksfel, felaktiga svar och providerfel ger svenska meddelanden
 och manuell fallback utan rå feltext. Lookup har högst tio försök per användare
-och minut per serverprocess. Räknaren rymmer högst 1 000 aktiva användare och nekar
-ytterligare lookup vid full kapacitet. Omstart/flera serverless-instanser gör att
-detta inte är en global kvot: konfigurera även leverantörens kontokvot/kostnadsgräns
-före publik drift. Ingen ny generell rate-limit-infrastruktur införs.
+och minut via en atomisk PostgreSQL-räknare som delas av alla serverinstanser.
+DB-fel stoppar lookup före provideranrop. Se ”Distribuerad rate limiting” nedan;
+leverantörens globala kontokvot/kostnadsgräns behövs fortfarande före publik drift.
 
 ### Migration, proveniens och säkerhet
 
@@ -551,7 +550,8 @@ on conflict (singleton) do update set signing_secret = excluded.signing_secret;
 ```
 
 Bind $1 till den hemliga strängen via administrationsverktyget; lägg aldrig värdet i
-migrationsfil, Git, klientkod eller logg. Ingen service role används i appen. Utan
+migrationsfil, Git, klientkod eller logg. Lookupens distribuerade limiter kräver
+serverns service role; fordon sparas fortfarande med användarens session. Utan
 konfiguration fungerar manuell registrering, men lookup-resultat kan inte sparas.
 
 Förhandsvisningen bär ett signerat kvitto som binder normaliserad data, auth-user,
@@ -719,7 +719,8 @@ mottagaren atomiskt. Egna personliga reminders följer aldrig med.
 Migration `supabase/migrations/20260914000700_vehicle_transfers.sql` körs efter
 service reminders. Den skapar `vehicle_transfers` och `vehicle_transfer_documents`
 med RLS, index, constraints och kontrollerade RPC-funktioner. Ingen hostad miljö
-ändras automatiskt och inga nya appberoenden eller service role behövs.
+ändras automatiskt och inga nya appberoenden behövs. Migration 11 kräver serverns
+service role för limitering och preview/accept; se distribuerad rate limiting nedan.
 
 ### Token och livscykel
 
@@ -864,7 +865,8 @@ familjedelning eller claim discovery införs.
 Fordonsprofilens **Exportera servicebok** hämtar en PDF via
 `POST /vehicles/[vehicleId]/export`. Knappen visar lokal laddning, bekräftelse och
 ett återförsökbart fel. Exporten använder PDFKit i Next.js Node-runtime, utan
-browserprocess, externa fontanrop eller service role. DejaVu Sans 2.37 Regular/Bold
+browserprocess eller externa fontanrop. Fordonsdata läses med användarens RLS;
+den separata rate-limit-kontrollen använder service role. DejaVu Sans 2.37 Regular/Bold
 ligger som oförändrade TTF-assets i `assets/fonts/dejavu/`, med upstreamlicens och
 SHA-256. Licensen är Bitstream Vera med DejaVu-ändringar i public domain; hela
 licensfilens övriga glyphnotiser följer med. `outputFileTracingIncludes` tar med
@@ -1032,7 +1034,7 @@ en nyare; vid exakt samma skapandesekund behålls den redan lagrade subscription
 Leasen gäller två minuter och kontrolleras igen vid mutation så en försenad worker
 inte kan skriva efter att en ny tagit över. Stripe-anrop har begränsad timeout/retry.
 
-Service role används endast i `services/subscriptions/backend.ts`, via den
+Billing använder service role i `services/subscriptions/backend.ts`, via den
 `server-only`-markerade fabriken `lib/supabase/admin.ts`. Det är det uttryckligt
 privilegierade lagret för billinglease, Customer-koppling, webhookuppslag och
 atomisk synkning. Vanliga produktservices fortsätter använda användarsession/RLS.
@@ -1164,6 +1166,65 @@ Regressioner finns i `tests/delete-empty-vehicle-rls.test.ts` och
 `tests/vehicle-transfer-concurrency.mjs` testar båda låsordningarna mot skapande
 av servicepost, dokumentmetadata och transfer. Dessutom kräver ett schema-test
 att beroendeinventeringen granskas om nya FK till `vehicles` tillkommer.
+
+## Distribuerad rate limiting
+
+Migration `20260924001100_distributed_rate_limits.sql` ersätter lookupens lokala
+Map med gemensam PostgreSQL-limitering. Alla Vercel-instanser i samma miljö använder
+samma atomiska räknare. Gränserna är definierade endast i SQL-funktionen
+`consume_rate_limit`, utan klientstyrda limit/window-parametrar:
+
+| Scope | Gräns per verifierat konto |
+| --- | --- |
+| vehicle_lookup | 10 / 60 sekunder |
+| pdf_export | 5 / 60 sekunder |
+| billing_checkout | 5 / 600 sekunder |
+| billing_portal | 10 / 600 sekunder |
+| transfer_preview | 30 / 60 sekunder |
+| transfer_accept | 10 / 600 sekunder |
+
+`private.rate_limits` lagrar endast user UUID, scope, använd räknare och sluttid.
+Primärnyckeln är konto/scope, högst sex rader per registrerat konto. Gamla fönster
+återanvänds vid nästa försök, inaktiva rader försvinner när profilen tas bort.
+Det finns ingen rad per försök eller tidsfönster och ingen cron behövs. Tabellens
+RLS är aktiverad utan klientpolicies; inte heller service role har direkt
+tabellåtkomst. En SECURITY DEFINER-funktion med tom search_path och EXECUTE endast
+för service_role utför INSERT ON CONFLICT och FOR UPDATE. Databasklockan läses
+efter låset. Fönstret startar vid första tillåtna försöket och återställs först
+när det löpt ut; detta är inte ett glidande fönster.
+
+`lib/rate-limit.ts` härleder subject från requireUser och gör ett separat,
+committat RPC-anrop före dyrt arbete. Alla scopes är **fail closed** vid DB-fel,
+saknad servernyckel eller felaktigt svar. Providerfel, avbrutna försök och retry
+återbetalar inte en slot. Lookup stoppar före providern, PDF före snapshot och
+rendering, Checkout/Portal före billing-lease och alla Stripe-anrop. Även reuse
+av öppen Checkout räknas: subscriptions/session måste fortfarande hämtas från
+Stripe. Lease/fencing, Customer-reconciliation och idempotency är oförändrade.
+PDF svarar med 429, säkert heltals-Retry-After och befintliga no-store-headers.
+Auth, Premium och ownership kontrolleras fortfarande; RLS används för PDF-data.
+
+Transfer-preview hämtar fordonsuppgifter endast efter inloggning. Ingen IP-limit
+påstås: vi använder inte x-forwarded-for eller sparar IP, token eller token-hash
+i limiter-tabellen. Gamla preview/accept-RPC:ers klientgrants återkallas för att
+förhindra bypass. Nya server-only wrappers tar verifierat user UUID och befintlig
+SHA-256-digest. De kör de oförändrade kärnfunktionerna med denna transaktionslokala
+identitet och återställer identiteten efteråt. Endast den betrodda servern får
+anropa dem. Ett nekat limiterförsök når aldrig tokenuppslag; användarfelet är
+generiskt oavsett om token finns. Misslyckad accept rullar tillbaka ownership-
+transaktionen men inte det tidigare limiteranropet.
+
+SUPABASE_SERVICE_ROLE_KEY krävs nu även utan Stripe för dessa skyddade flöden och
+får aldrig exponeras som NEXT_PUBLIC. Migration och kompatibel serverkod måste
+deployas samordnat eftersom äldre transferkod förlorar direkt RPC-execute.
+Stripe-webhook använder **inte** användarlimitern: signaturkontroll, lease och
+idempotency fortsätter skydda retries. WAF mot anonym trafik/masskonton, maskning
+av capability-paths i driftsloggar, global providerbudget och PDF-samtidighet/
+minnesgränser återstår som driftansvar. Kontoräknare ersätter inte dessa skydd.
+
+SQL-gränser/grants/retention testas i `tests/rate-limit-rls.test.ts`. Native
+PostgreSQL-sviten provar två transaktioner om sista sloten, tolv anslutningar om
+fem slots samt nytt fönster och konto/scope-isolering. App-tester verifierar
+fail closed före provideranrop och att webhooken lämnas utanför.
 
 ## Preview/staging och release
 
