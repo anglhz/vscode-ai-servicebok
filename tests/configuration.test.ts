@@ -7,7 +7,12 @@ import { logBilling } from "@/lib/observability/billing";
 import nextConfig from "../next.config";
 afterEach(()=>{vi.unstubAllEnvs();vi.restoreAllMocks();});
 const env={APP_URL:"https://staging.example",NEXT_PUBLIC_SUPABASE_URL:"https://test.supabase.co",NEXT_PUBLIC_SUPABASE_ANON_KEY:"sb_publishable_fixture",SUPABASE_SERVICE_ROLE_KEY:"fixture",STRIPE_SECRET_KEY:"sk_test_fixture",STRIPE_WEBHOOK_SECRET:"whsec_fixture",STRIPE_PREMIUM_MONTHLY_PRICE_ID:"price_monthly",STRIPE_PREMIUM_YEARLY_PRICE_ID:"price_yearly",VERCEL_ENV:"preview"};
-it("accepts complete staging config and disabled optional lookup",()=>{for(const feature of ["app","supabase","billing","lookup"] as const)expect(configurationIssues(feature,env)).toEqual([]);});
+it("accepts complete staging config and disabled optional lookup",()=>{for(const feature of ["app","supabase","billing","lookup","cleanup"] as const)expect(configurationIssues(feature,{...env,CRON_SECRET:"fixture-".repeat(8)})).toEqual([]);});
+it("cleanup readiness refuses missing/short secrets without printing their values",()=>{
+  expect(configurationIssues("cleanup",{}).join()).toContain("SUPABASE_SERVICE_ROLE_KEY");
+  const issues=configurationIssues("cleanup",{...env,CRON_SECRET:"sensitive"}).join();
+  expect(issues).toContain("CRON_SECRET"); expect(issues).not.toContain("sensitive");
+});
 it.each(["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PREMIUM_MONTHLY_PRICE_ID","STRIPE_PREMIUM_YEARLY_PRICE_ID","SUPABASE_SERVICE_ROLE_KEY"])("rejects partial billing missing %s",name=>{expect(configurationIssues("billing",{...env,[name]:""}).join()).toContain(name);});
 it("rejects live Stripe keys in preview",()=>{expect(configurationIssues("billing",{...env,STRIPE_SECRET_KEY:"sk_live_fixture"}).join()).toContain("test mode");});
 it("missing webhook config fails before Stripe initialization without logging values",()=>{

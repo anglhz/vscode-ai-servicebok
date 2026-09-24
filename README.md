@@ -427,11 +427,54 @@ Den behandlar högst 20 kandidater per körning för det behöriga fordonet:
   utfärdas under de första 15 minuterna. En gammal token kan återlägga en fysiskt raderad
   fil före utgång, men aldrig göra deleted metadata synlig. Slutstädningen sker efteråt.
 
-För konton som inte laddar upp igen behövs en återkommande driftstädning före produktion.
-Den är inte schemalagd av denna PR. Kör samma kandidater → Storage API remove → complete
-med behörig användarsession. Historiska fordon utan aktiv ägare kräver ett separat
-administrerat städflöde. Radera aldrig storage.objects med SQL för att radera filbytes.
+Global driftstädning kompletterar detta även för inaktiva konton; se
+”Schemalagd dokumentstädning” nedan. Användarflödet och dess behörigheter är
+oförändrade. Radera aldrig storage.objects med SQL för att radera filbytes.
 Soft deleted metadata bevaras som spårbarhet även efter fysisk städning.
+
+### Schemalagd dokumentstädning
+
+Migration `20260924001200_document_retention_cleanup.sql` och serverrutinen
+`services/document-cleanup` städar globalt utan användarcookie/aktuellt ägarskap.
+`POST /api/internal/document-cleanup` kräver `Authorization: Bearer <CRON_SECRET>`.
+Generera minst 32 slumpbytes (t.ex. base64-kodade) och lagra som serversecret,
+separat för local/staging/production. Ingen `NEXT_PUBLIC_`-variant. Även
+`SUPABASE_SERVICE_ROLE_KEY` krävs. `npm run check:config` kontrollerar konfigurationens
+form utan att visa värden. Saknad/svag cron-secret stänger endpointen (503);
+saknad/fel Authorization ger 401. Body, querystring och cookies väljer inga dokument.
+
+- Pending äldre än tre timmar markeras soft-deleted och filbytes städas.
+- Redan soft-deleted dokument med `storage_deleted_at is null` städas först när
+  `created_at` är äldre än tre timmar, så gamla upload-capabilities har gått ut.
+- Aktiva ready-dokument och transfer-orphaned, otillgängliga ready-dokument med
+  `deleted_at is null` städas aldrig. Ägarbyte i sig är aldrig en raderingsgrund.
+  Oavslutade pending-uppladdningar följer samma tretimmarsregel oavsett ägare.
+- Dokumentraden och dess historiska kopplingar behålls; endast bytes raderas och
+  `storage_deleted_at` sätts. Ingen visibility, ownership eller quota-attribution ändras.
+  Soft-delete frigör logisk kvot som tidigare; fysisk lagring kan släpa efter.
+
+Högst 50 dokument per HTTP-körning, fem samtidiga Storage-anrop, fem sekunders
+timeout per nätverksanrop och gemensam deadline 45 sekunder inom routens 60 sekunder.
+SQL begränsar RPC-batchen till 1–100 och använder ett partiellt kandidatindex.
+`FOR UPDATE SKIP LOCKED` kombineras med fem minuters beständig reservation i
+`private.document_cleanup_claims`. Token och expiry skyddar completion efter att
+claimtransaktionen committats. En krasch/fel lämnar jobbet retrybart när reservationen
+går ut; gamla workers kan inte slutföra en ny workers reservation.
+
+Storage remove körs via privat bucket `vehicle_documents`. Lyckat svar (även tomt)
+eller explicit `NoSuchKey` följs av completion-RPC, som dessutom kontrollerar att
+objektet saknas i `storage.objects`. Generisk 404 och andra fel är inte bevis på
+att rätt objekt saknas. Fel för en fil stoppar inte andra; logg/response innehåller
+bara status och claimed/deleted/failed. Crash efter delete men före completion
+återhämtas med idempotent remove och completion. Metadata raderas aldrig.
+
+**Schemat är inte aktiverat av koden.** Vercel Cron skickar GET och passar därför
+inte denna POST-only-endpoint ([officiell dokumentation](https://vercel.com/docs/cron-jobs)).
+Konfigurera en betrodd extern scheduler varje timme enligt STAGING. Ingen GET-brygga
+eller `vercel.json`-cron tillkommer. Övervaka missade körningar, failed > 0 och
+upprepade fulla batcher; 50/timme är en kapacitetsgräns, inte en garanti för rensad kö.
+Stoppa schemat för att pausa framtida borttagning; redan raderade bytes återställs
+bara från separat Storage-backup. Databasbackup innehåller inte filbytes.
 
 ### UI, queries och validering
 

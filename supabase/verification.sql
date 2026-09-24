@@ -18,6 +18,18 @@ begin
     where n.nspname='public' and p.prosecdef and not coalesce('search_path=""'=any(p.proconfig) or 'search_path=pg_catalog'=any(p.proconfig),false)) then
     raise exception 'Unsafe SECURITY DEFINER search_path';
   end if;
+  foreach item in array array['claim_document_cleanup_batch(integer)','complete_document_retention_cleanup(uuid,uuid)'] loop
+    if has_function_privilege('anon','public.'||item,'EXECUTE')
+      or has_function_privilege('authenticated','public.'||item,'EXECUTE')
+      or not has_function_privilege('service_role','public.'||item,'EXECUTE') then
+      raise exception 'Unexpected document cleanup RPC grants';
+    end if;
+  end loop;
+  if has_table_privilege('anon','private.document_cleanup_claims','SELECT,INSERT,UPDATE,DELETE')
+    or has_table_privilege('authenticated','private.document_cleanup_claims','SELECT,INSERT,UPDATE,DELETE')
+    or has_table_privilege('service_role','private.document_cleanup_claims','SELECT,INSERT,UPDATE,DELETE') then
+    raise exception 'Unexpected document cleanup claim access';
+  end if;
   foreach item in array array['service_interval_overview','reminder_overview'] loop
     if not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where n.nspname='public' and c.relname=item and 'security_invoker=true'=any(c.reloptions)) then

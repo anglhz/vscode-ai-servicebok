@@ -1427,3 +1427,26 @@ auth.uid-underlag, anropar befintlig capability-/ownership-logik och återställ
 identiteten. Klientexecute på kärnfunktionerna och wrappers är återkallad så att
 direkt RPC inte kringgår limitering. Skapa/avbryt transfer använder fortsatt
 sessionsklienten. Ingen service role lämnar servern, och ingen IP-identitet antas.
+
+## Schemalagd dokumentretention
+
+Extern betrodd scheduler → `POST /api/internal/document-cleanup` →
+`services/document-cleanup` → service-role claim-RPC → privata Storage remove →
+fenced completion-RPC. CRON_SECRET jämförs via SHA-256 och timingSafeEqual; session,
+body och querystring används inte. Endpointen ligger utanför sessionsproxyn.
+Ingen GET-handler finns och ingen Vercel Cron aktiveras (den använder GET).
+Konfiguration, timschema och stagingtest finns i STAGING.
+
+50 kandidater, fem parallella workers, 5s per request och total 45s deadline under
+60s routegräns. Adminfabriken kan för denna service få en aborterbar fetch;
+billing/limitering behåller sina befintliga klientinställningar. DB:s femminuterslease
+överlever timeout/crash; en ny token stänger ute sen completion från gammal worker.
+Extern Storage DELETE kan inte transaktionellt fencas: en redan skickad request kan
+slutföras sent. Därför väljs endast irreversibelt deleted, ålderssäkra objekt på
+unika, icke återanvända paths; upprepad DELETE är ofarlig. Ingen restorefunktion ingår.
+
+Fel isoleras per dokument. Endast counts/status loggas och returneras, aldrig
+SDK-fel, paths, filnamn eller identiteter. Slutförande kräver frånvaro även i
+storage.objects. Metadata och historiska kopplingar behålls; vanlig user cleanup
+och dess åtkomstkontroll är oförändrade. Ready-dokument utan deleted_at, inklusive
+otillgängliga ej överförda dokument, omfattas inte av denna retentionpolicy.
