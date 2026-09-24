@@ -138,3 +138,30 @@ test("transfer waits for an event mutation, preserves it, then denies the seller
   await assert.rejects(seller.query("select create_service_event($1,'service','After transfer',current_date)", [v]), {code:"42501"});
   assert.deepEqual((await buyer.query("select title,mileage from service_events where vehicle_id=$1", [v])).rows, [{title:"Before transfer",mileage:12345}]);
 });
+
+// Exercise the complete audit against PostgreSQL-generated proconfig values,
+// not a duplicated JS implementation of the search_path predicate.
+for (const { name, clause, allowed } of [
+  { name: 'empty path', clause: "set search_path = ''", allowed: true },
+  { name: 'exact pg_catalog', clause: 'set search_path = pg_catalog', allowed: true },
+  { name: 'public', clause: 'set search_path = public', allowed: false },
+  { name: 'pg_catalog plus public', clause: 'set search_path = pg_catalog, public', allowed: false },
+  { name: 'arbitrary schema', clause: 'set search_path = audit_untrusted', allowed: false },
+  { name: 'explicit temporary schema', clause: 'set search_path = pg_catalog, pg_temp', allowed: false },
+  { name: 'missing search_path', clause: '', allowed: false },
+  { name: 'quoted comma-containing schema name', clause: 'set search_path = "pg_catalog, public"', allowed: false },
+]) {
+  test(`schema audit SECURITY DEFINER: ${name}`, async () => {
+    await db.query(`create function public.audit_search_path_fixture() returns integer
+      language sql security definer ${clause} as $$select 1$$`);
+    try {
+      const audit = readFileSync(new URL('../supabase/verification.sql', import.meta.url), 'utf8');
+      if (allowed) await db.query(audit);
+      else await assert.rejects(db.query(audit), { code: 'P0001', message: 'Unsafe SECURITY DEFINER search_path' });
+    } finally {
+      // A rejected read-only audit leaves its explicit transaction aborted.
+      await db.query('rollback');
+      await db.query('drop function public.audit_search_path_fixture()');
+    }
+  });
+}

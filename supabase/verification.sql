@@ -12,8 +12,10 @@ begin
       raise exception 'Missing table/RLS: %',item;
     end if;
   end loop;
+  -- Supabase rls_auto_enable uses exactly pg_catalog, the trusted system schema.
+  -- Accept only these complete proconfig entries, never paths containing other schemas.
   if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-    where n.nspname='public' and p.prosecdef and not coalesce('search_path=""'=any(p.proconfig),false)) then
+    where n.nspname='public' and p.prosecdef and not coalesce('search_path=""'=any(p.proconfig) or 'search_path=pg_catalog'=any(p.proconfig),false)) then
     raise exception 'Unsafe SECURITY DEFINER search_path';
   end if;
   foreach item in array array['service_interval_overview','reminder_overview'] loop
