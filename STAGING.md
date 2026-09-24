@@ -91,6 +91,7 @@ Ordning, utan manuella mellansteg:
 7. 20260914000700_vehicle_transfers
 8. 20260920000800_vehicle_export
 9. 20260921000900_subscriptions
+10. 20260924001000_delete_empty_vehicle
 
 `pgcrypto` installeras av migration 5 i `extensions`. Om ett äldre projekt redan
 har extensionen i annat schema stoppar migrationen tydligt. Flytta inte extensioner

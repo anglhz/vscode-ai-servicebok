@@ -1300,3 +1300,18 @@ kontolås och stoppar överskridande reservationer atomiskt. Transfer flyttar ba
 utvalda färdiga dokuments kvotkonto och återställs helt om mottagarens gräns överskrids.
 Nedgradering ändrar inte befintliga data. Gränser, retentionavvägningar, statusmodell
 och test-/driftsinstruktioner finns i README:s Billing-avsnitt.
+
+## Radering av felregistrerat, historikfritt fordon
+
+Migration `20260924001000_delete_empty_vehicle.sql` inför endast RPC:n
+`delete_empty_vehicle(uuid)`, inga nya tabeller eller ändrade FK/policies.
+SECURITY DEFINER med tom search_path och EXECUTE endast för authenticated
+kontrollerar aktiv owner under fordons- och ägarlås. Exakt en ägarrad måste finnas.
+Serviceposter, miltal, dokument, intervall, påminnelser och transfers blockerar
+oavsett status. Kontrollen omfattar även dolt material och kvarvarande Storage-
+objekt. Endast den enda ägarraden och det tomma fordonet raderas atomiskt.
+Lookupfält på fordonet är teknisk metadata som följer med vid denna radering.
+Fullständig relationsinventering och concurrency-strategi finns i README.
+
+Servicehistorik tillhör fordonet och ownership är separat. Detta snäva undantag
+ger därför ingen rätt att radera normal fordonshistorik eller tidigare ägarperioder.
