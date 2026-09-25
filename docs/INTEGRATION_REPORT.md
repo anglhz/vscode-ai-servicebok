@@ -171,6 +171,25 @@ därför inte i sig en queryoptimering. Kontrollen verifierade inte signup,
 e-postbekräftelse, session refresh eller andra flöden utöver de uttryckligen
 angivna routterna och login med autentiserad navigation.
 
+### Production-verifiering av Dashboard efter PR #22
+
+Efter merge av PR #22 verifierades `GET /dashboard` separat i Production. Anropet
+returnerade HTTP 200. De instrumenterade serverstegen rapporterade `outcome=ok`
+och `VERCEL_REGION=arn1`:
+
+| Mätpunkt | Tid |
+| --- | ---: |
+| `auth.get_user` | 60,4 ms |
+| `dashboard.vehicles_query` | 102,8 ms |
+| `dashboard.reminders_query` | 56,3 ms |
+| Function Invocation | 170 ms |
+| Response finished | 265 ms |
+
+Routing Middleware-steget `proxy.get_claims` tog 14 ms och rapporterade `fra1`.
+Det redovisas separat eftersom Routing Middleware distribueras oberoende av den
+konfigurerade regionen för serverfunktionerna. Kontrollen omfattade endast
+`GET /dashboard`; inga andra Production-routes eller produktflöden verifierades.
+
 Backup/restore är fortfarande overifierat och en produktionsblockerare enligt
 [issue #18](https://github.com/anglhz/vscode-ai-servicebok/issues/18). Den tidigare
 dokumenterade retentionstatusen ändras inte. Lokala automatiska tester, hosted
