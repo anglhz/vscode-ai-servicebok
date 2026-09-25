@@ -12,7 +12,11 @@ Se [STAGING.md](STAGING.md) och [testprotokoll](docs/SMOKE_TEST.md).
 - [ ] APP_URL/Site URL/exakt callback fungerar från stabil HTTPS-staging-origin.
 - [x] Hosted 2026-09-25: logout följt av direkt navigation till `/dashboard`
   skickade användaren till login utan att visa privat innehåll.
-- [ ] Signup, mailbekräftelse, login och session refresh PASS i hosted staging.
+- [x] Hosted Preview PR #22 2026-09-25: login och autentiserad navigation till
+  `/dashboard`, `/vehicles`, `/reminders` och `/account` fungerade. Routterna gav
+  HTTP 200 från `arn1` och samtliga instrumenterade steg hade `outcome=ok`; se
+  [mätresultaten](docs/INTEGRATION_REPORT.md#preview-region-och-navigationsmätning-för-pr-22).
+- [ ] Signup, mailbekräftelse och session refresh PASS i hosted staging.
 - [ ] A/B/C PostgREST och direkt Storage: åtkomst nekas för fel användare.
 - [ ] PDF/JPEG/PNG: signed upload, bytes, finalize, läsning, download, delete och cleanup PASS.
 - [ ] Transfer, valda/icke valda dokument, Free-gräns och samtidiga acceptanrop PASS.

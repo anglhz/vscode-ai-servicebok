@@ -151,6 +151,26 @@ följer av detta; öppna delkontroller står kvar i PRODUCTION_CHECKLIST.md.
 | Responsiv layout | 320 och 390 px fungerade utan observerad horisontell overflow eller kapat innehåll; desktop-layout/navigation såg korrekt ut vid 1280 px. Navigation mellan relevanta appvyer fungerade. | Labels, loading states och felmeddelanden verifierades inte av denna kontroll. |
 | Tangentbord/fokus | Tab-navigation och synlig fokusmarkering fungerade på Hem och Fordon på desktop; ingen keyboard trap observerades. | Detta är en begränsad manuell kontroll, inte en full tillgänglighetscertifiering. |
 
+### Preview-region och navigationsmätning för PR #22
+
+PR #22 verifierades manuellt i Vercel Preview efter att Function-regionen ändrats
+från `iad1` till `arn1`. `/dashboard`, `/vehicles`, `/reminders` och `/account`
+returnerade HTTP 200, samtliga instrumenterade steg hade `outcome=ok` och
+`VERCEL_REGION=arn1`. Login och efterföljande autentiserad navigation fungerade.
+
+| Route | Response finished i `iad1` | Response finished i `arn1` | Function Invocation i `iad1` | Function Invocation i `arn1` |
+| --- | ---: | ---: | ---: | ---: |
+| Dashboard | 1,3 s | 352 ms | 962 ms | 271 ms |
+| Vehicles | 1,3 s | 466 ms | 910 ms | 414 ms |
+| Reminders | 2,6 s | 343 ms | 2,34 s | 274 ms |
+| Account | 1,3 s | 362 ms | 866 ms | 307 ms |
+
+Det tidigare utfallet på 2321,9 ms för `reminders.main_query` uppmättes i `iad1`.
+Motsvarande operation uppmättes till 264 ms i `arn1`. Den äldre mätningen motiverar
+därför inte i sig en queryoptimering. Kontrollen verifierade inte signup,
+e-postbekräftelse, session refresh eller andra flöden utöver de uttryckligen
+angivna routterna och login med autentiserad navigation.
+
 Backup/restore är fortfarande overifierat och en produktionsblockerare enligt
 [issue #18](https://github.com/anglhz/vscode-ai-servicebok/issues/18). Den tidigare
 dokumenterade retentionstatusen ändras inte. Lokala automatiska tester, hosted
