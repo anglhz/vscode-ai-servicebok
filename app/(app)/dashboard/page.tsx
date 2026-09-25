@@ -8,11 +8,12 @@ import { VehicleCard } from "@/components/vehicles/vehicle-card";
 import { getVehiclesForCurrentUser } from "@/services/vehicles";
 import { Suspense } from "react";
 import { UpcomingReminders } from "@/components/service-plan/upcoming";
+import { measurePerformance } from "@/lib/observability/performance";
 
 export const metadata: Metadata = { title: "Hem" };
 
 export default async function DashboardPage() {
-  const [vehicle] = await getVehiclesForCurrentUser();
+  const [vehicle] = await measurePerformance("dashboard.vehicles_query", () => getVehiclesForCurrentUser());
   return <>
     <PageHeader title="Hem" description="Ditt fordons historik, samlad på ett ställe." />
     {vehicle ? <div className="space-y-4"><VehicleCard vehicle={vehicle} /><Button variant="outline" asChild className="min-h-12"><Link href="/vehicles">Visa alla fordon</Link></Button></div> :

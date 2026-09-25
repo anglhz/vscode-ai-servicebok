@@ -6,11 +6,12 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { VehicleCard } from "@/components/vehicles/vehicle-card";
 import { getVehiclesForCurrentUser } from "@/services/vehicles";
+import { measurePerformance } from "@/lib/observability/performance";
 
 export const metadata: Metadata = { title: "Fordon" };
 
 export default async function VehiclesPage({ searchParams }: { searchParams: Promise<{ deleted?: string }> }) {
-  const vehicles = await getVehiclesForCurrentUser();
+  const vehicles = await measurePerformance("vehicles.main_query", () => getVehiclesForCurrentUser());
   const addAction = <Button asChild className="min-h-12"><Link href="/vehicles/new">Lägg till fordon</Link></Button>;
   return <>
     <PageHeader title="Mina fordon" description="Dina fordon, samlade på ett ställe." action={vehicles.length ? addAction : undefined} />
