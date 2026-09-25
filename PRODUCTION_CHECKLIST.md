@@ -125,4 +125,6 @@ ska fortfarande beslutas och verifieras före publik lansering.
 - [x] Production 2026-09-25: `GET /dashboard` gav HTTP 200; de instrumenterade
   serverstegen hade `outcome=ok` och körde i `arn1`. Se den avgränsade
   [Production-mätningen](docs/INTEGRATION_REPORT.md#production-verifiering-av-dashboard-efter-pr-22).
-- [ ] Produktions-smoke utan destruktiva tester eller oauktoriserade livecharges.
+- [x] Produktions-smoke utan destruktiva tester eller oauktoriserade livecharges
+  verifierad på `main` commit `96fd7ed`; se
+  [Production-smoke-rapporten](docs/INTEGRATION_REPORT.md#production-smoke-på-main-96fd7ed).
