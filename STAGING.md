@@ -4,6 +4,7 @@ Status och faktiskt körda kontroller finns i [integrationsrapporten](docs/INTEG
 En grön lokal svit är inte bevis på fungerande hostad Auth, Storage eller Stripe.
 Använd endast ett dedikerat Supabase-testprojekt, Stripe testläge och syntetiska data.
 Den här guiden auktoriserar inga produktionsmigrationer eller livebetalningar.
+Driftansvar, bevakningssignaler och första incidentåtgärder finns i [OPERATIONS.md](OPERATIONS.md).
 
 ## Miljövariabler
 
