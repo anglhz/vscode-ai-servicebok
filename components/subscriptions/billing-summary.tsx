@@ -1,9 +1,10 @@
 import { getBillingOverview } from "@/services/subscriptions";
 import { BillingButton } from "./billing-button";
+import { measurePerformance } from "@/lib/observability/performance";
 
 const labels: Record<string, string> = { inactive: "Inget aktivt abonnemang", active: "Aktivt", trialing: "Provperiod", past_due: "Betalning försenad", canceled: "Avslutat", unpaid: "Obetalt", incomplete: "Betalning väntar", incomplete_expired: "Betalning utgången", paused: "Pausat" };
 export async function BillingSummary({ checkout }: { checkout?: string }) {
-  const billing = await getBillingOverview().catch(() => null);
+  const billing = await measurePerformance("account.billing_query", () => getBillingOverview()).catch(() => null);
   if (!billing) return <section className="mt-6 max-w-lg rounded-xl border bg-card p-6"><h2 className="font-semibold">Abonnemang</h2><p role="status" className="mt-2 text-sm">Abonnemanget kunde inte hämtas. Försök igen senare.</p></section>;
   return <section className="mt-6 max-w-lg space-y-4 rounded-xl border bg-card p-6">
     <h2 className="text-lg font-semibold">Plan: {billing.plan === "premium" ? "Premium" : "Free"}</h2>

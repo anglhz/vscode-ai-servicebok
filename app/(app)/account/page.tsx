@@ -4,12 +4,13 @@ import { requireUser } from "@/lib/auth/session";
 import { getOwnProfile } from "@/services/profiles/get-profile";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { BillingSummary } from "@/components/subscriptions/billing-summary";
+import { measurePerformance } from "@/lib/observability/performance";
 
 export const metadata: Metadata = { title: "Konto" };
 
 export default async function AccountPage({ searchParams }: { searchParams: Promise<{ checkout?: string }> }) {
   const user = await requireUser();
-  const { profile, unavailable } = await getOwnProfile();
+  const { profile, unavailable } = await measurePerformance("account.profile_query", () => getOwnProfile());
   return <>
     <PageHeader title="Konto" description="Dina uppgifter och inställningar." />
     <section className="max-w-lg space-y-6 rounded-xl border bg-card p-6">

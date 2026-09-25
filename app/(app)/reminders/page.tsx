@@ -8,6 +8,7 @@ import { ReminderCard } from "@/components/reminders/reminder-card";
 import { ReminderForm } from "@/components/reminders/reminder-form";
 import { getReminders } from "@/services/reminders";
 import { getVehiclesForCurrentUser } from "@/services/vehicles";
+import { measurePerformance } from "@/lib/observability/performance";
 
 export const metadata: Metadata = { title: "Påminnelser" };
 
@@ -19,7 +20,7 @@ export default async function RemindersPage({ searchParams }: { searchParams: Pr
       <EmptyState title="Lägg till ett fordon först" description="Påminnelser hör till ett fordon." action={<Button asChild className="min-h-12"><Link href="/vehicles/new">Lägg till fordon</Link></Button>} />}</>;
   }
   const requested = Number(query.page ?? 1), page = Number.isInteger(requested) && requested >= 1 && requested <= 10000 ? requested : 1;
-  const { reminders, hasMore } = await getReminders(page);
+  const { reminders, hasMore } = await measurePerformance("reminders.main_query", () => getReminders(page));
   return <>
     <PageHeader title="Påminnelser" description="Håll koll på vad som behöver göras härnäst." />
     <Button asChild className="mb-6 min-h-12"><Link href="/reminders?new=1">Ny påminnelse</Link></Button>

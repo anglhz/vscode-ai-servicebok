@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+vi.mock("server-only", () => ({}));
 const refresh = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock("@supabase/ssr", () => ({
   createServerClient: (_url: string, _key: string, options: { cookies: { setAll: (cookies: { name: string; value: string; options: { path: string } }[]) => void } }) => ({
@@ -8,6 +9,7 @@ vi.mock("@supabase/ssr", () => ({
   }),
 }));
 import { updateSession } from "../lib/supabase/proxy";
+import { performanceRequestHeader } from "../lib/observability/performance";
 
 it("forwards refreshed cookies to both downstream request and browser response without shared caching", async () => {
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
@@ -18,5 +20,6 @@ it("forwards refreshed cookies to both downstream request and browser response w
   expect(request.cookies.get("sb-test-auth-token")?.value).toBe("refreshed");
   expect(response.cookies.get("sb-test-auth-token")?.value).toBe("refreshed");
   expect(response.headers.get("x-middleware-request-cookie")).toContain("refreshed");
+  expect(response.headers.get(`x-middleware-request-${performanceRequestHeader}`)).toMatch(/^[0-9a-f-]{36}$/i);
   expect(response.headers.get("cache-control")).toBe("private, no-store");
 });

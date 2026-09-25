@@ -3,6 +3,7 @@ import { getServiceIntervals } from "@/services/service-intervals";
 import { getReminders } from "@/services/reminders";
 import { DueSummary } from "./due-summary";
 import { ReminderCard } from "@/components/reminders/reminder-card";
+import { measurePerformance } from "@/lib/observability/performance";
 
 export async function NextService({ vehicleId }: { vehicleId: string }) {
   let result;
@@ -17,7 +18,7 @@ export async function NextService({ vehicleId }: { vehicleId: string }) {
 }
 export async function UpcomingReminders() {
   let result;
-  try { result = await getReminders(1, 3); }
+  try { result = await measurePerformance("dashboard.reminders_query", () => getReminders(1, 3)); }
   catch { return <p className="mt-6 text-sm">Påminnelserna kunde inte hämtas just nu.</p>; }
   if (!result.reminders.length) return null;
   return <section className="mt-8 space-y-4"><h2 className="text-xl font-semibold">Att hålla koll på</h2>
