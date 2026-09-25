@@ -1,6 +1,8 @@
-# Integrationsrapport – stagingförberedelse 2026-09-22
+# Integrationsrapport – stagingförberedelse och verifieringslogg
 
-**Inte production ready. Inga hosted tester kördes i denna uppgift.** Miljön saknar
+## Lokal stagingförberedelse 2026-09-22
+
+**Inte production ready. Inga hosted tester kördes i den uppgiften.** Miljön saknade
 konfigurerade Supabase/Vercel/Stripe-stagingcredentials och testprovider. Ingen
 produktion har migrerats, inga livebetalningar eller produktionsrader har ändrats.
 PR:n förbereder reproducerbar staging; [STAGING.md](../STAGING.md),
@@ -130,3 +132,26 @@ Inga migrationer, RLS-policies, entitlement-/quota-/transferregler eller
 produktfunktioner ändrades. Lokala QA-harnessar/artifacts och PG17-runtime ligger
 utanför apprepot; inga nya appdependencies. Intern readiness är ett lokalt CLI,
 inte en publik endpoint. PR:n ska granskas; ingen merge ingår i denna uppgift.
+
+## Hosted manuella tilläggskontroller 2026-09-25
+
+Följande kontroller genomfördes manuellt mot
+`https://vscode-ai-servicebok.vercel.app`. De kompletterar den lokala rapporten
+ovan och bevisar endast de uttryckligen angivna delarna. Ingen releaseklar-status
+följer av detta; öppna delkontroller står kvar i PRODUCTION_CHECKLIST.md.
+
+| Kontroll | Verifierat resultat | Fortsatt öppet |
+| --- | --- | --- |
+| Stripe webhook-prenumeration | Destinationen prenumererar på `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid` och `invoice.payment_failed`. | Separata nya end-to-end-körningar för varje eventtyp gjordes inte denna dag. Runtime, retry, duplicate/order och downgrade följs separat. |
+| Säkerhetsheaders på `/dashboard` | `Cache-Control: private, no-cache, no-store, max-age=0, must-revalidate`; `Content-Security-Policy: frame-ancestors 'none'`; `Referrer-Policy: no-referrer`; `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`; `X-Content-Type-Options: nosniff`; `X-Frame-Options: DENY`. | Full framtida script-src-CSP samt Transfer/PDF/CDN-kontroller är inte godkända av denna kontroll. |
+| Cleanup, fel secret | POST med avsiktligt felaktig Bearer-secret gav 401, `Cache-Control: no-store` och `{"status":"unauthorized"}`. Inget riktigt secret användes eller dokumenterades. | Övrig auth- och incidentövervakning följs separat. |
+| Cleanup, metod | GET gav 405 Method Not Allowed. | Uteblivna körningar, upprepade fulla batcher och hosted lease/retry är fortsatt öppna. |
+| Cleanup, scheduler | Korrekt scheduler-POST fungerade. | Schemalagd kontinuitet och missed-run-bevakning är fortsatt öppna. |
+| Logout och routeskydd | Efter logout skickade direkt navigation till `/dashboard` användaren till login; inget privat innehåll visades. | Signup, mailbekräftelse, login och session refresh markeras inte PASS av denna kontroll. |
+| Responsiv layout | 320 och 390 px fungerade utan observerad horisontell overflow eller kapat innehåll; desktop-layout/navigation såg korrekt ut vid 1280 px. Navigation mellan relevanta appvyer fungerade. | Labels, loading states och felmeddelanden verifierades inte av denna kontroll. |
+| Tangentbord/fokus | Tab-navigation och synlig fokusmarkering fungerade på Hem och Fordon på desktop; ingen keyboard trap observerades. | Detta är en begränsad manuell kontroll, inte en full tillgänglighetscertifiering. |
+
+Backup/restore är fortfarande overifierat och en produktionsblockerare enligt
+[issue #18](https://github.com/anglhz/vscode-ai-servicebok/issues/18). Den tidigare
+dokumenterade retentionstatusen ändras inte. Lokala automatiska tester, hosted
+manuell verifiering och dokumenterade rutiner är fortsatt separata bevisnivåer.

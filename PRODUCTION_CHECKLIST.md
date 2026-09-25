@@ -10,16 +10,27 @@ Se [STAGING.md](STAGING.md) och [testprotokoll](docs/SMOKE_TEST.md).
 - [ ] Preview använder Stripe testnycklar och egen Supabase. Ingen livebetalning.
 - [ ] Alla migrationer till och med 12 på tom hostad Supabase, migration list och verification.sql PASS.
 - [ ] APP_URL/Site URL/exakt callback fungerar från stabil HTTPS-staging-origin.
-- [ ] Signup, mailbekräftelse, login, refresh, logout och skyddad route PASS.
+- [x] Hosted 2026-09-25: logout följt av direkt navigation till `/dashboard`
+  skickade användaren till login utan att visa privat innehåll.
+- [ ] Signup, mailbekräftelse, login och session refresh PASS i hosted staging.
 - [ ] A/B/C PostgREST och direkt Storage: åtkomst nekas för fel användare.
 - [ ] PDF/JPEG/PNG: signed upload, bytes, finalize, läsning, download, delete och cleanup PASS.
 - [ ] Transfer, valda/icke valda dokument, Free-gräns och samtidiga acceptanrop PASS.
 - [ ] Faktisk livslängd för redan utfärdad signed URL efter transfer uppmätt.
 - [ ] Servicehistorik, miltal, intervall och reminders inklusive svensk midnatt PASS.
 - [ ] Vercel PDF: Unicode, fontassets offline, lång historik, tid/storlek/minne dokumenterade.
-- [ ] Stripe Checkout/Portal, sex eventtyper, duplicate/retry/order, downgrade PASS.
+- [x] Hosted 2026-09-25: Stripe webhook-destinationen prenumererar på exakt de sex
+  avsedda eventtyperna: `checkout.session.completed`, `customer.subscription.created`,
+  `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`
+  och `invoice.payment_failed`.
+- [ ] Stripe Checkout/Portal, separat runtime för relevanta eventtyper,
+  duplicate/retry/order och downgrade PASS.
 - [ ] Två samtidiga Checkout skapar inte dubbla Customers/subscriptions.
-- [ ] Mobil 320/390/1280, tangentbord, fokus, labels och lokala loading/fel PASS.
+- [x] Hosted 2026-09-25: layout och navigation verifierade vid 320, 390 och 1280 px
+  utan observerad horisontell overflow eller kapat innehåll.
+- [x] Hosted 2026-09-25: Tab-navigation och synlig fokusmarkering verifierade på
+  Hem och Fordon på desktop, utan observerad keyboard trap.
+- [ ] Labels samt lokala loading- och felmeddelanden PASS i hosted staging.
 - [ ] Full testsvit, typecheck, lint, build, native PG och npm audit godkända.
 - [ ] Secret-/Gitignore-granskning utan riktiga nycklar i Git, output eller klientbundle.
 
@@ -38,8 +49,10 @@ Se [STAGING.md](STAGING.md) och [testprotokoll](docs/SMOKE_TEST.md).
 - [ ] Vercel/WAF/access-loggar maskar `/transfer/<token>`, query-parametrar i
   auth-callback/signed Storage URLs, cookies och Authorization. Appens Next-devlogg
   ignorerar transfer-path och serverfunctions; leverantörsloggar har egen policy.
-- [ ] Global no-referrer, nosniff och frame-ancestors 'none'/DENY verifierade externt.
-  Transfer: private/no-store + noindex. PDF: private/no-store även CDN/Vercel.
+- [x] Hosted 2026-09-25 på `/dashboard`: `Cache-Control: private, no-cache, no-store,
+  max-age=0, must-revalidate`, no-referrer, nosniff, `frame-ancestors 'none'`, DENY
+  och HSTS (`max-age=63072000; includeSubDomains; preload`) verifierade externt.
+- [ ] Transfer: private/no-store + noindex. PDF: private/no-store även CDN/Vercel.
 - [ ] Full script-src-CSP är separat framtida arbete (Next-nonce/SSR-kompatibilitet).
   HSTS/TLS kontrolleras på den faktiska domänen; aktivera inte preload blint.
 - [ ] Staging noindex/åtkomstskydd och webhookundantag granskade. Robots är inte auth.
@@ -72,9 +85,14 @@ ska fortfarande beslutas och verifieras före publik lansering.
   Kvotan släpper vid soft-delete; fysisk lagring kan släpa efter.
 - [ ] Konfigurera extern POST-scheduler varje timme och CRON_SECRET separat per miljö.
   Inget schema aktiveras av repo-konfigurationen; Vercel Cron använder GET.
-  Verifiera fel secret, uteblivna körningar, felantal, upprepade fulla batcher och
-  fem minuters lease/retry. Driftansvar enligt OPERATIONS.md; 50 objekt/timme kan kräva fler
-  kontrollerade körningar vid backlog. Dölj Authorization och requestdata i driftloggar.
+    - [x] Hosted 2026-09-25: korrekt scheduler-POST fungerar.
+    - [x] Hosted 2026-09-25: fel Bearer-secret gav 401, no-store och endast
+      `{"status":"unauthorized"}`; inga riktiga secrets dokumenterades.
+    - [x] Hosted 2026-09-25: GET mot cleanup-endpointen gav 405.
+    - [ ] Verifiera uteblivna körningar, felantal, upprepade fulla batcher och
+      fem minuters lease/retry. Driftansvar enligt OPERATIONS.md; 50 objekt/timme kan
+      kräva fler kontrollerade körningar vid backlog. Dölj Authorization och
+      requestdata i driftloggar.
 - [ ] Privata, ej valda filer efter transfer kan sakna åtkomlig ägare men fortfarande
   belasta tidigare kvotkonto. Besluta retention och administrativ borttagning; gör
   inte filerna publika och överför dem inte automatiskt. Ready + deleted_at null
