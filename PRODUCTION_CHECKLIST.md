@@ -25,8 +25,10 @@ Se [STAGING.md](STAGING.md) och [testprotokoll](docs/SMOKE_TEST.md).
 
 ## Drift och säkerhet
 
-- [ ] Namnge ansvarig för 5xx, Auth/SMTP-fel, Storage upload/finalize/delete/cleanup,
-  PDF-fel, transfer-fel, quota-fel och misslyckade/uteblivna Stripe-webhooks.
+- [x] Primärt driftansvar dokumenterat: produktägare/admin för Servicebok,
+  enligt [OPERATIONS.md](OPERATIONS.md).
+- [ ] Verifiera bevakning av signalerna i [driftplanen](OPERATIONS.md#bevakas),
+  inklusive uteblivna cleanup-körningar. Dokumenterad rutin är inte aktiverad övervakning.
 - [ ] Stripe-loggar: `stripe_webhook` + outcome + tillåtet event-ID/type. `processed`
   betyder accepterad hantering, även dubblett/ignorerat event, **inte** att Premium
   beviljats. Larma på processing_error/configuration_error, Stripe retry-backlog
@@ -62,13 +64,16 @@ ska fortfarande beslutas och verifieras före publik lansering.
 
 ## Retention, backup och återställning
 
+- [ ] **Produktionsblockerare: backup/restore är inte verifierat.**
+  [TODO #18](https://github.com/anglhz/vscode-ai-servicebok/issues/18) kvarstår tills
+  faktisk restoreövning godkänts; markera inte PASS utifrån dokumentation eller lokala tester.
 - [ ] Applicera migration 12 och verifiera global dokumentstädning i STAGING:s testplan.
   Soft-deleted bytes och abandoned pending >3h städas; metadata behålls permanent i V1.
   Kvotan släpper vid soft-delete; fysisk lagring kan släpa efter.
 - [ ] Konfigurera extern POST-scheduler varje timme och CRON_SECRET separat per miljö.
   Inget schema aktiveras av repo-konfigurationen; Vercel Cron använder GET.
   Verifiera fel secret, uteblivna körningar, felantal, upprepade fulla batcher och
-  fem minuters lease/retry. Namnge driftansvarig; 50 objekt/timme kan kräva fler
+  fem minuters lease/retry. Driftansvar enligt OPERATIONS.md; 50 objekt/timme kan kräva fler
   kontrollerade körningar vid backlog. Dölj Authorization och requestdata i driftloggar.
 - [ ] Privata, ej valda filer efter transfer kan sakna åtkomlig ägare men fortfarande
   belasta tidigare kvotkonto. Besluta retention och administrativ borttagning; gör
