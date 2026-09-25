@@ -190,6 +190,27 @@ Det redovisas separat eftersom Routing Middleware distribueras oberoende av den
 konfigurerade regionen för serverfunktionerna. Kontrollen omfattade endast
 `GET /dashboard`; inga andra Production-routes eller produktflöden verifierades.
 
+### Production-smoke på main `96fd7ed`
+
+Production-deploymenten för `main` commit `96fd7ed` var `Ready`. Utloggad
+direktåtkomst till `/dashboard`, `/vehicles`, `/reminders` och `/account`
+omdirigerades till login utan synligt privat innehåll. Login med ett befintligt
+godkänt konto, autentiserad läsande navigation till de fyra vyerna och logout via
+ordinarie UI fungerade utan synliga tjänstefel. Direktåtkomst till `/dashboard`
+efter logout omdirigerades åter till login.
+
+Vercelloggarna för testfönstret visade inga HTTP 5xx samt 0 Warning, 0 Error och
+0 Fatal. Observerade `outcome:error` hörde till HTTP 307-routeskyddsredirecter och
+är en känd begränsning i den nuvarande instrumenteringen, inte ett verifierat
+driftfel. I den inspekterade requesten hade `auth.get_user` `outcome=ok`, medan
+querymarkeringen `dashboard.vehicles_query` rapporterade `outcome=error` efter
+0,5 ms. Requesten gjorde inga externa anrop och avslutades med HTTP 307.
+
+Inga fordon, reminders, serviceposter eller annat innehåll skapades, ändrades
+eller raderades under kontrollen. Inga Checkout-, Billing- eller Customer
+Portal-flöden öppnades. Kontrollen verifierade endast denna icke-destruktiva
+Production-smoke; inga övriga produktionsflöden verifierades.
+
 Backup/restore är fortfarande overifierat och en produktionsblockerare enligt
 [issue #18](https://github.com/anglhz/vscode-ai-servicebok/issues/18). Den tidigare
 dokumenterade retentionstatusen ändras inte. Lokala automatiska tester, hosted
