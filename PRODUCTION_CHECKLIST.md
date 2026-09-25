@@ -122,4 +122,7 @@ ska fortfarande beslutas och verifieras före publik lansering.
 - [ ] Separata produktionssecrets/Price/webhook, exakt APP_URL/redirects, ingen wildcard.
 - [ ] Inga CLI testsecrets i liveendpoint; public anon-key är korrekt och ej privilegierad.
 - [ ] Larm, rate limits, retentionansvar och incident-/rollbackkontakt aktiverade.
+- [x] Production 2026-09-25: `GET /dashboard` gav HTTP 200; de instrumenterade
+  serverstegen hade `outcome=ok` och körde i `arn1`. Se den avgränsade
+  [Production-mätningen](docs/INTEGRATION_REPORT.md#production-verifiering-av-dashboard-efter-pr-22).
 - [ ] Produktions-smoke utan destruktiva tester eller oauktoriserade livecharges.
